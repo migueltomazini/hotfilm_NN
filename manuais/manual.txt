@@ -20,11 +20,11 @@ Train:
     -   Um conjunto de dados de velocidade por tempo a 20Hz do sensor sônico.  
 
     1. Preparação dos dados para treino: após a coleta dos dados em .csv, crie uma pasta única no formato dado_coletado_xxx dentro do diretório:
-        dados/dados_crus/dados_cru_treino
+        dados/dados_cru/dados_cru_treino
         
     2. Depois de criada, a pasta deve conter dois arquivos: hotfilm_xxx.csv e sonic_xxx da seguinte forma:
-        dados/dados_crus/dados_cru_train/dado_coletado_xxx/hotfilm_xxx.csv
-        dados/dados_crus/dados_cru_train/dado_coletado_xxx/sonic_xxx.csv
+        dados/dados_cru/dados_cru_train/dado_coletado_xxx/hotfilm_xxx.csv
+        dados/dados_cru/dados_cru_train/dado_coletado_xxx/sonic_xxx.csv
         
     -> Exemplos:
         dado_coletado_xxx
@@ -79,10 +79,10 @@ Run:
     - De um dataset de dados do hotfilm em tensão
     
     1. Após a coleta dos dados em .csv, crie uma pasta única no formato dado_coletado_xyz dentro do diretório:
-        dados/dados_crus/dados_cru_run
+        dados/dados_cru/dados_cru_run
         
     2. Depois de criada, a pasta deve conter o dataset hotfilm_xyz.csv da seguinte forma:
-        dados/dados_crus/dados_cru_run/dado_coletado_xyz/hotfilm_xyz.csv
+        dados/dados_cru/dados_cru_run/dado_coletado_xyz/hotfilm_xyz.csv
         
         Exemplos:
         dado_coletado_xyz
