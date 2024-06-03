@@ -1,0 +1,29 @@
+instale o ambiente virtual do python em sua máquina:
+
+$ pip install virtualenv	
+
+Vá para uma pasta que deseja que esteja o workspace do projeto
+Lá, execute o seguinte comando:
+
+$ virtualenv hotfilm_env 
+
+para se entrar dentro do ambiente, use:
+
+$ source hotfilm_env/bin/activate
+
+	obs: Caso queira sair do ambiente, execute:
+
+	$ deactivate
+
+Para instalar todas as dependências necessárias dos algorítmos de treinamento da rede:
+
+	obs: certifique-se que esteja dentro do environment. Para isso, vá até o workspace e execute:
+
+	$ source hotfilm_env/bin/activate
+
+Estando no workspace:
+
+$ pip install -r requirements.txt
+
+
+Neste momento, todas as dependêcias do código serão instaladas na máquina e poderá utilizar a Rede Neural	
