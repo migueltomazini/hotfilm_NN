@@ -216,6 +216,7 @@ def export_data(df, predictions, see_train_loss, see_val_loss, accuracy, dir_bas
             'batch_size': [batch_size],
             'hidden_size': [hidden_size],
             'model_name_local': [model_name_local],
+            'train_time': [time.time()-START_TIME],
             'data_treinamento': [formatted_time],
             
         })
