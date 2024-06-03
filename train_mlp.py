@@ -369,14 +369,7 @@ def trained_info(data, predicted):
     if torch.is_tensor(predicted):
         predicted = predicted.cpu().detach().numpy().squeeze()
 
-    print(predicted)
-    # predicted = pd.DataFrame(predicted, columns=[ 'velocity_x',  'velocity_y' , 'velocity_z']).astype('float64')
     predicted.columns = [ 'velocity_x',  'velocity_y' , 'velocity_z']
-    # print(f'\ndatatypes: predicted\n {predicted.dtypes}\n\n output_df\n {output_df.dtypes}')
-    # print('\npredicted:\n',predicted)
-    # print('\ndf data:\n',output_df)
-    print(output_df)
-    print(predicted)
     diff = (predicted-output_df)
     print('\n -> Diferença entre o esperado e o obtido do treinamento com o set de validação:\n',diff)
     diff_media = diff.abs().mean().to_numpy()[0]
