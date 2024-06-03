@@ -26,4 +26,4 @@ Estando no workspace:
 $ pip install -r requirements.txt
 
 
-Neste momento, todas as dependêcias do código serão instaladas na máquina e poderá utilizar a Rede Neural	
+Neste momento, todas as dependêcias do código serão instaladas na máquina e poderão ser utilizadas na Rede Neural.
