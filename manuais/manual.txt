@@ -4,7 +4,7 @@ Os algoritmos em python encontrados dentro de `hotfilm_NN` têm como possível o
 Antes de tudo:
     1. Após ter instalado o virtual environment, vá para a pasta do projeto (será a mesma em que está este manual) e deixe como raiz no bash;
     2. execute o comando:
-        $ source hotfilm_NN/bin/activate
+        $ source hotfilm_env/bin/activate
         obs: Caso queira sair do ambiente, execute:
             $ deactivate
     3. Todos os comandos e interações com a rede são executadas com a raíz em /hotfilm_NN
