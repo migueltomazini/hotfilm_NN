@@ -2,31 +2,14 @@ import pandas as pd
 import sys
 
 
-info =\
+
+info = '''
+
+Confira o manual dentro da pasta a seguir para colocar os dados corretos para gerar os arquivos CSV:
+    manuais/manual.txt
 '''
-    ____________________-_- Criador de csv de entrada -_-____________________
-        Como usar:
-    train:
-        $   python3 csv_maker.py train {nome da pasta em específico} {nome da saida}
 
-        -> Exemplo:
-        $   python3 csv_maker.py train data_collected_1 df_1
-        
-        Observação:
-            A pasta em específico tem de estar dentro do diretório: 
-                dados/dados_cru/dados_cru_treino
-    run:
-        $   python3 csv_maker.py run {nome da pasta em específico} {nome da saida}
-
-        -> Exemplo:
-        $   python3 csv_maker.py run data_coletado_x dados_2kHz_Run.csv
-        
-        Observação:
-            A pasta em específico tem de estar dentro do diretório: 
-                dados/dados_cru/dados_cru_treino
-
-'''
-if len(sys.argv) < 2:
+if len(sys.argv) < 2 or len(sys.argv)>3:
     print(info)
     sys.exit()
 
@@ -39,7 +22,6 @@ def train_create_CSV():
     voltage_data.columns = voltage_column_names
     voltage_data.set_index('time', inplace=True)  # Set 'time' column as index
     df_20hz = voltage_data.iloc[::100]
-    print(df_20hz)
 
 
     # Read velocity data
@@ -47,8 +29,8 @@ def train_create_CSV():
     velocity_column_names = ['time', 'velocity_x', 'velocity_y', 'velocity_z']
     velocity_data.columns = velocity_column_names
     velocity_data.set_index('time', inplace=True)  # Set 'time' column as index
-    print(velocity_data)
     df_final = pd.merge(voltage_data,velocity_data, on='time')
+    print("Dataframe de treino final:\n")
     print(df_final)
     df_final.to_csv(f'./dados/treino/train_df_{serie}.csv')
     print(f"\nDataSet pronto para treino. Está salvo como:\n->\t./dados/treino/train_df_{serie}.csv\n")

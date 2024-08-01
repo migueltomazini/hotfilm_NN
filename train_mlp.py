@@ -17,33 +17,10 @@ from sklearn.preprocessing import StandardScaler
 
 
 info_output = '''
-    -- -- -- -- -- -- Como usar o algorítmo -- -- -- -- -- -- 
-    
-    -- -- -- --  -- -- -- --  -- -- --
-        -> Caso 1 
-        
-        - Treinar e rodar a rede com os mesmos dados:
-    O dataframe tem de ser do tipo .CSV:
-    - time, voltage_x, voltage_y, voltage_z, velocity_x, velocity_y, velocity_z
 
-    python3 model_mlp_v{VERSION}.py train {nome final do arquivo exportado e controle de saida} {nome do dataframe de dados voltage-velocity}
-    exemplo:
-    $ python3 model_mlp_v{VERSION}.py train nome_de_controle nome_dataframe_treino
-    
-    -- -- -- --  -- -- -- --  -- -- --
+Confira o manual dentro da pasta a seguir para colocar os dados corretos para treinamento:
+    manuais/manual.txt
 
-        -> Caso 2 
-        
-        - Rodar no banco de dados com modelo salvo :
-    formato dos dados de entrada
-    - time, voltage_x, voltage_y, voltage_z
-
-    python3 model_mlp_v{VERSION}.py "run" {nomear a saida} {nome do modelo salvo} {nome dos dados tensão de entrada} {nome dos dados velocidade de saida} 
-    exemplo:
-
-    $ python3 model_mlp_v{VERSION}.py run  name_result model.pth  data_voltage.csv data_complete_with_velocity.csv
-    
-    -- -- -- --  -- -- -- --  -- -- --
 '''
 ''' 
     @author Lucas Duarte    
@@ -54,7 +31,7 @@ info_output = '''
 '''
 __author__ = "Lucas Sales Duarte"
 __email__ = "lucassalesduarte026@gmail.com"
-__status__ = "Production"
+__status__ = "finished"
 
 # Hiper parâmetros
 
@@ -120,7 +97,7 @@ local_destino = (f"{dir_base}/dados/treino/resultados_train/resultado_{SERIE}") 
 print("\n\n -- -- -- -- - -- -- -- ")
 print("Nome de série:\t",SERIE)
 print("\n\n Rede processando dados")
-print(f"\n\t - Modelo usado: \t\t{model_local}\n\t - Usará os dados de:\t\t{local_data}\n\t - Será salvo no destino em: \t{local_destino} ")
+print(f"\n\t - Modelo será salvo em: \t\t{model_local}/model_mlp_{SERIE}.pth\n\t - Usará os dados de:\t\t\t{local_data}\n\t - Metadados serão salvos no destino em:\t{local_destino} ")
 print("\n\n -- -- -- -- - -- -- -- ")
 sys.stdout.flush()
 
@@ -129,7 +106,7 @@ stop_counting = 1
 def processing(start_time):
         
     global stop_counting
-    for i in range(86400): # um dia de tempo
+    for i in range(86400): # um dia de tempo 24 horas
         if stop_counting == 0:
             break 
         current_time = time.time()- start_time
@@ -147,7 +124,7 @@ def processing(start_time):
         - formato de entrada e saída da rede
         - definição das funções de ativação
 '''
-# Definindo a classe nn que contém o modelo
+# Definindo a classe NN que contém o modelo
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=hidden_size, num_hidden_layers=hidden_layers):
         super(MLP, self).__init__()
@@ -172,7 +149,6 @@ class VoltageVelocityDataset(Dataset):
         self.Y = (torch.tensor(
             data[[f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']].values).float().unsqueeze(1)).to(device)
         
-
     def __len__(self):
         return len(self.X)
 
@@ -216,7 +192,7 @@ def export_data(df, predictions, see_train_loss, see_val_loss, accuracy, dir_bas
             'batch_size': [batch_size],
             'hidden_size': [hidden_size],
             'model_name_local': [model_name_local],
-            'train_time': [time.time()-START_TIME],
+            'train_time(s)': [time.time()-START_TIME],
             'data_treinamento': [formatted_time],
             
         })
@@ -282,10 +258,9 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     # Mostrar os gráficos
     plt.show()
 
-
+#   Função de treinamento do modelo com o conjunto data 
 def train(data):
     # Dividir os dados em dois segmentos: treino e validação numa relação de 80% para 20%
-        
     train_data = data.sample(frac=0.9, random_state=42)
     val_data = data.drop(train_data.index)
 
@@ -352,7 +327,7 @@ def train(data):
     return mlp, see_train_loss, see_val_loss
 
 
-# Evaluate the MLP on the entire dataset
+# Avaliar uma saída dada uma entrada com o modelo treinado
 def predict(mlp, data):
     with torch.no_grad():
         X = torch.tensor(
@@ -402,10 +377,15 @@ def main(dataframe):
     validation_loss = validation_loss.rename(columns={validation_loss.columns[0]: 'time'})
     validation_loss = validation_loss.rename(columns={validation_loss.columns[1]: 'error_val'})
 
+    #   Salvar o modelo
     if SAVE == True:
         save_model(model)
+        
+    #   Guardar os metadados do treinamento
     if EXPORT_DATA == True:
         export_data(dataframe, predicted, train_loss, validation_loss, accuracy, dir_base)
+        
+    #   Gerar os gráficos para visualização e controle do treinamento
     if GRAPHS == True:
         show_graphs(dataframe, predicted, train_loss, validation_loss)
     print("\n\t Treinamento concluído !")

@@ -17,22 +17,10 @@ from sklearn.preprocessing import StandardScaler
 
 
 info_output = '''
-    -- -- -- -- -- -- Como usar o algorítmo -- -- -- -- -- -- 
-        
-    -> Rodar no banco de dados com modelo salvo :
 
-    python3 run_mlp_v{VERSION}.py {nomear a saida} {nome do modelo salvo} {nome dos dados tensão de entrada} {nome dos dados velocidade de saida} 
+Confira o manual dentro da pasta a seguir para colocar os dados corretos para treinamento:
+    manuais/manual.txt
 
-    - Exemplo:
-    $ python3   run_mlp_v{VERSION}.py   name_result model.pth   data_voltage.csv    data_complete_with_velocity.csv
-    
-
-    Observação:
-        O modelo deve estar dentro da pasta models ou abaixo (há de se especificar no argumento o subdiretório)
-        Os dados de entrada têm de estar em .csv do seguinte formato:   | time, voltage_x, voltage_y, voltage_z |
-        Os dados salvos serão encontrados em dados/gerados/ em uma pasta específica desse processamento
-        
-    -- -- -- --  -- -- -- --  -- -- --
 '''
 ''' 
     @author lucas
@@ -45,36 +33,12 @@ __author__ = "Lucas Sales Duarte"
 __email__ = "lucassalesduarte026@gmail.com"
 __status__ = "Production"
 
-# Hiper parâmetros
-
-EPOCHS = 2000
-amount = -1     # Tamanho do dataset  |  se negativo, usará o data set todo
+#   Definições Globais
 input_size = 3          # define o formato de entrada dos dados, no caso, 3 entradas para 3 saída (x,y,z)
 output_size = 3
 
 hidden_layers = 2       # 2 comum
 hidden_size = 8         # 8 comum
-
-learning_rate = 0.01
-batch_size = 32
-
-
-''' observação
-O tamanho dos dados do df com o predict é amout
-O tamanho dos dados de treino é igual a 3 vezes EPOCHS
-O tamanho dos dados de validação é igual à EPOCHS
-'''
-
-
-# MODOS
-EXPORT_DATA = True    # Exporta arquivos .csv para analizar o resultado da rede
-GRAPHS = True         # Mostrar os gráficos
-SAVE = True          # Salvar o modelo
-GPU =  0              # 0 para uso da CPU                   | 1 para uso da GPU 
-LOCAL = 1             # 0 para no cluster da USP            | 1 para TREINO no notebook
-
-
-#   Definições Globais
 
 START_TIME = time.time()
 train_data_df=''
@@ -83,17 +47,13 @@ output_df_name = "velocity"
 model_local = './modelos'
 caminho_local = '.'
 caminho_cluster = '/home/lucasdu/algoritmo/2_cluster_architecture'
-dir_base = ''
-if LOCAL == 1:
-    dir_base = caminho_local
-elif LOCAL == 0:
-    dir_base = caminho_cluster
-    GRAPHS = False
+dir_base = caminho_local
+
 if (len(sys.argv) < 2 or sys.argv[1]== '?'):
     print(info_output)
     sys.exit()
 # Seleção do dispositivo de processamento
-device = torch.device("cuda" if torch.cuda.is_available() and GPU else "cpu")
+device = "cpu"
 print(f"Device de processamento: {device}\n")
     
 # ______________________________________________-_- RODAR -_-______________________________________________________
@@ -185,6 +145,7 @@ def export_data_run(df,predictions,destino):
 def runModel(local_modelo,local_data,local_destino):
     model = MLP(input_dim=input_size, output_dim=output_size, hidden_dim=hidden_size, num_hidden_layers=hidden_layers)
     model.load_state_dict(torch.load(local_modelo))
+    model.to(device)
     model.eval()  # Set the model to evaluation mode
     
     # Prepare the data (adjust this part based on your data loading requirements)
@@ -215,11 +176,10 @@ def main():
     runModel(local_modelo=local_modelo, local_data=local_data, local_destino=local_destino)
     
     print(f"\nA execução total do código durou: { time.time()- START_TIME:.2f} segundos")
+    print(f"\nOs resultados pode sem encontrado em {local_destino}")
 
 
-if __name__ == '__main__':
-    main()
-
+main()
 
 
 
