@@ -1,25 +1,28 @@
-Os algoritmos em python encontrados dentro de `hotfilm_NN` têm como possível o argumento
-"?" para se obter informações de como indicar os parâmetros de entrada
-
 Antes de tudo:
-    1. Após ter instalado o virtual environment, vá para a pasta do projeto (será a mesma em que está este manual) e deixe como raiz no bash;
-    2. execute o comando:
+    1. Após ter instalado o virtual environment com os passos do arquivo installation.txt, vá para a pasta do projeto 
+    (será a mesma em que está este manual, ./hotfilm_NN) e passe a usá-la para todos os procedimentos;
+
+    2. execute o comando para habilitar o ambiente virtual:
         $ source hotfilm_env/bin/activate
         obs: Caso queira sair do ambiente, execute:
             $ deactivate
-    3. Todos os comandos e interações com a rede são executadas com a raíz em /hotfilm_NN
+    3. Todos os comandos e interações com a rede são executadas com base em ./hotfilm_NN localmente
 
-    O identificador "SERIE" é carregado desde os primeiros arquivos e comandos até o final, escolha-o estratégicamente para uma boa organização.
-    Nos exemplos a seguir o identificador de série escolhido é "xyz"
+    O identificador "SERIE" é carregado desde os primeiros arquivos e comandos até o final dos procedimentos,
+    escolha-o estratégicamente para uma boa organização de seus projetos.
+    Nos exemplos a seguir o identificador de série escolhido como exemplo é "xxx"
 
 
 Train:
  - treinar uma rede - 
-    Para treinar um modelo, precisa-se de:
-    -   Um conjunto de dados de tensão por tempo a 2000Hz do sensor hotfilm;
-    -   Um conjunto de dados de velocidade por tempo a 20Hz do sensor sônico.  
 
-    1. Preparação dos dados para treino: após a coleta dos dados em .csv, crie uma pasta única no formato dado_coletado_xxx dentro do diretório:
+    Para treinar um modelo, precisa-se de:
+        -   Um conjunto de dados de tensão por tempo a 2000Hz do sensor hotfilm;
+        -   Um conjunto de dados de velocidade por tempo a 20Hz do sensor sônico.  
+
+    1. Preparação dos dados para treino: 
+        Após a coleta dos dados em .csv, crie uma pasta única no formato dado_coletado_xxx dentro do diretório:
+        
         dados/dados_cru/dados_cru_treino
         
     2. Depois de criada, a pasta deve conter dois arquivos: hotfilm_xxx.csv e sonic_xxx da seguinte forma:
@@ -44,41 +47,48 @@ Train:
             $  python3 csv_maker.py train xxx
     
     4. Com o dataset de treinamento pronto e dentro da pasta:
-        dados/treino/resultados_train/
+        dados/treino/
 
-       Pode-se começar o treinamento, com o seguinte comando' 
+       Pode-se começar o treinamento, com o seguinte comando:
             $ python3 train_mlp.py train {serie} 
 
         -> Exemplo:
             $ python3 train_mlp.py xxx
-   
+        O treinamento pode levar de alguns minutos a algumas horas, 
+        dependendo da especificação máquina local que processará os cálculos matriciai.
+        Ao concluir o treinamento com suficientes 1000 epochs (parametrizável em train_mlp.py),
+        serão apresentada imagens referentes ao treinamento para conferência do usuário. Certifique-se.
+        Para finalizar, basta fechar as imagens e o algoritmo irá finalizar.
+
     5. Resultados:
         Os meta dados serão salvos na pasta:
+
             dados/treino/resultados_train/
-            Neste diretório acima será inserida uma planilha com as informações do treinamento e o nome do modelo respectivo a esse treinamento
+            Neste diretório acima será inserida uma planilha com as informações do
+            treinamento e o nome do modelo respectivo a esse treinamento
             
         O modelo será salvo na pasta `modelos/` como:
             modelos/model_mlp_xxx.pth
 
-    Observações de treinamento:
-        Dentro do arquivo train_mlp.py há hiperparâmetros a serem alterados:
+    -> Observações de treinamento:
+        Dentro do arquivo train_mlp.py há hiperparâmetros que podem ser alterados conforme a necessidade do treinamento:
 
-            EPOCHS          ->   determina a quantidade de vezes que o dataset passará pela rede de treinamento (1000 - padráo)
-            EXPORT_DATA     ->   Exporta arquivos .csv (metadados) para analizar o resultado da rede
-            GRAPHS          ->   Mostrar os gráficos ou não
-            SAVE            ->   Salvar o modelo ou não
-            GPU             ->   0 para uso da CPU (RECOMENDADO) | 1 para treino em GPU (código não otimizado para GPU não otimizado)      
-            LOCAL           ->   0 para rodar em ambiente sem interface (sem mostrar os gráficos) | 1 para TREINO em SO com interface
+            EPOCHS          ->   determina a quantidade de vezes que o dataset passará pela rede de treinamento (1000 - padráo);
+            EXPORT_DATA     ->   Exporta arquivos .csv (metadados) para analizar o resultado da rede;
+            GRAPHS          ->   Mostrar os gráficos ou não;
+            SAVE            ->   Salvar o modelo ou não;
+            GPU             ->   0 para uso da CPU (RECOMENDADO) | 1 para treino em GPU (código não otimizado para GPU, NÃO RECOMENDADO);
+            LOCAL           ->   0 para rodar em ambiente sem interface (sem mostrar os gráficos) | 1 para TREINO em S.O. com interface.
 
 
 
 Run: 
- - rodar dados em um modelo - 
+ - Rodar dados em um modelo - 
     -> Para isso, precisa-se de:
-    - Um modelo já treinado que esteja dentro de `modelos/`;
-    - De um dataset de dados do hotfilm em tensão
+        - Um modelo já treinado que esteja dentro de `modelos/`;
+        - De um dataset de dados do hotfilm em tensão (preparado a seguir)
     
-    1. Após a coleta dos dados em .csv, crie uma pasta única no formato dado_coletado_xyz dentro do diretório:
+    1. Após a coleta dos dados de tensão do hotfilm em 2kHz em .csv, crie uma pasta única no formato dado_coletado_xxx dentro do diretório:
         dados/dados_cru/dados_cru_run
         
     2. Depois de criada, a pasta deve conter o dataset hotfilm_xyz.csv da seguinte forma:
@@ -120,4 +130,19 @@ Run:
     Observações:
         O modelo deve estar dentro da pasta modelos ou abaixo (há de se especificar no argumento o subdiretório)
         Os dados de entrada têm de estar em .csv do seguinte formato:   | time, voltage_x, voltage_y, voltage_z |
-        Os dados salvos serão encontrados em dados/gerados/ em uma pasta específica desse processamento com o identificador de série
+        Os dados salvos serão encontrados em dados/gerados/ em uma pasta específica desse processamento com o identificador de série.
+
+Espectro: 
+    Geração do espectro 
+    1.  Execute o comando a seguir para criar um gráfico com o espectro do sinal de velocidade gerado através
+        do processamento de um conjunto de dados de tensão por um modelo.
+        
+        $   python3 spectrum.py {SERIE}
+    -> Exemplo:
+        $   python3 spectrum.py xxx
+
+        obs: o dataframe que será utilizado pelo espectro é o que tiver na pasta 
+        com o identificador de série relativo {SERIE} dentro da pasta.
+
+    -> Exemplo de arquivo que será buscado caso xxx seja o identificador:    
+        /dados/run/velocity_xxx/velocity_xxx.csv
