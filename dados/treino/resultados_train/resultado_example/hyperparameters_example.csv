@@ -1,0 +1,2 @@
+Média,Máximo,Mínimo,Accuracy (RMSE),Epochs,hidden_layers,hidden_size,learning_rate,batch_size,model_name_local,train_time,data_treinamento
+0.0741885792369833,0.4442518216386091,1.167792613898655e-05,0.12330210953950882,1000,2,8,0.01,32,./modelos/model_mlp_normalbom.pth,4867.107127189636,15/07/2024 12:55
