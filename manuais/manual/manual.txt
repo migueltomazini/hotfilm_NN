@@ -50,7 +50,7 @@ Train:
         dados/treino/
 
        Pode-se começar o treinamento, com o seguinte comando:
-            $ python3 train_mlp.py train {serie} 
+            $ python3 train_mlp.py {serie} 
 
         -> Exemplo:
             $ python3 train_mlp.py xxx

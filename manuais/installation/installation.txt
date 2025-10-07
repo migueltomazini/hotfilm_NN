@@ -9,7 +9,7 @@
 
 3.	Dentro da pasta ./hotfilm_NN, execute o seguinte comando:
 
-	$ virtualenv hotfilm_env 
+	$ python3.11 -m venv hotfilm_env
 
 4.	Entre em modo ambiente virtual da seguinte forma:
 
