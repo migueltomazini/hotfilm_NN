@@ -208,6 +208,10 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     shown = predictions
     if torch.is_tensor(shown):
         shown = pd.DataFrame(shown.squeeze().cpu().numpy(), columns = ['eixo_x','eixo_y','eixo_z'])
+
+    # Criação da pasta na qual os gráficos serão salvos (train)
+    if not os.path.exists(f"dados/run/resultados_run/velocity_{SERIE}/graphics/"):
+        os.mkdir(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/")
     
     # shown = shown.assign(original_x=data[[f'{output_df_name}_x']],original_y=data[[f'{output_df_name}_y']],original_z   =data[[f'{output_df_name}_z    ']])
     see_train_loss = pd.DataFrame(see_train_loss)
@@ -222,6 +226,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo X")
+    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Velocidade por tempo eixo x.png", format='png')
     plt.legend()
     
     plt.figure(1)
@@ -231,6 +236,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo Y")
+    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Velocidade por tempo eixo y.png", format='png')
     plt.legend()
     
     plt.figure(2)
@@ -239,6 +245,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo Z")
+    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Velocidade por tempo eixo z.png", format='png')
     plt.legend()
     
     plt.figure(3)
@@ -246,6 +253,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.plot(see_train_loss[see_train_loss.columns[0]], see_train_loss[see_train_loss.columns[1]],color='g', label='train')
     plt.xlabel("Interação")
     plt.ylabel("Erro")
+    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Erro do treino.png", format='png')
     plt.legend()
 
     plt.figure(4)
@@ -253,6 +261,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.plot(see_val_loss[see_val_loss.columns[0]], see_val_loss[see_val_loss.columns[1]],color='r', label='validation')
     plt.xlabel("Interação")
     plt.ylabel("Erro")
+    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Erro de validação.png", format='png')
     plt.legend()
 
     # Mostrar os gráficos

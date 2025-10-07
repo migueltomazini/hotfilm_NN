@@ -1,3 +1,4 @@
+import os
 import sys
 import numpy as np
 import pandas as pd
@@ -34,6 +35,11 @@ def show_periodogram(fig_num, data_predicted, data_sonic):
         data_predicted (pd.Series): Série temporal de velocidade predita.
         data_sonic (pd.Series): Série temporal de velocidade sônica (real).
     """
+
+    # Criação da pasta na qual os gráficos serão salvos (run)
+    if not os.path.exists(f"dados/run/resultados_run/velocity_{SERIE}/graphics/"):
+        os.mkdir(f"dados/run/resultados_run/velocity_{SERIE}/graphics/")
+
     plt.figure(fig_num)
 
     # Cálculo do períodograma de ambas as séries considerando a frequência de 20 e 2000 Hz, respectivamente.
@@ -48,6 +54,7 @@ def show_periodogram(fig_num, data_predicted, data_sonic):
     plt.ylabel("Densidade Espectral")
 
     plt.title(f"Periodograma da linha temporal de {data_sonic.name} prevista e sônica (real)")
+    plt.savefig(f"dados/run/resultados_run/velocity_{SERIE}/graphics/Períodograma {data_sonic.name}.png", format='png')
     plt.legend()
 
 show_periodogram(0, data_predicted['velocity_predicted_x'], data_sonic['velocity_x'])
