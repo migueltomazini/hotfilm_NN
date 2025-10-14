@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 info_output = '''
 
 Confira o manual dentro da pasta a seguir para colocar os dados corretos para treinamento:
-    manuais/manual.txt
+    manuals/manual.txt
 
 '''
 ''' 
@@ -44,7 +44,7 @@ START_TIME = time.time()
 train_data_df=''
 input_df_name = "voltage"
 output_df_name = "velocity"
-model_local = './modelos'
+model_local = './models'
 caminho_local = '.'
 caminho_cluster = '/home/lucasdu/algoritmo/2_cluster_architecture'
 dir_base = caminho_local
@@ -62,8 +62,8 @@ print(f"Device de processamento: {device}\n")
 
 SERIE = sys.argv[1]                                     #   Nome da do resultado
 local_modelo = (f"{model_local}/{sys.argv[2]}")                   #   Local do modelo     
-local_data = (f"{dir_base}/dados/run/run_{SERIE}.csv")              #   Local dos dados de entrada tensão
-local_destino = (f"{dir_base}/dados/run/resultados_run/velocity_{SERIE}")                             #   Local de saida desejado para os resultados da rede
+local_data = (f"{dir_base}/data/run/run_{SERIE}.csv")              #   Local dos dados de entrada tensão
+local_destino = (f"{dir_base}/data/run/run_results/velocity_{SERIE}")                             #   Local de saida desejado para os resultados da rede
 print("\n\n -- -- -- -- - -- -- -- ")
 print("Nome de série:\t",SERIE)
 print("\n\n Rede processando dados de tensão e gerando dados de saída ")

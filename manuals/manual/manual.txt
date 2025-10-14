@@ -21,33 +21,33 @@ Train:
         -   Um conjunto de dados de velocidade por tempo a 20Hz do sensor sônico.  
 
     1. Preparação dos dados para treino: 
-        Após a coleta dos dados em .csv, crie uma pasta única no formato dado_coletado_xxx dentro do diretório:
+        Após a coleta dos dados em .csv, crie uma pasta única no formato collected_data_xxx dentro do diretório:
         
-        dados/dados_cru/dados_cru_treino
+        data/raw_data/raw_data_treino
         
     2. Depois de criada, a pasta deve conter dois source hotfilm_env/bin/activatearquivos: hotfilm_xxx.csv e sonic_xxx da seguinte forma:
-        dados/dados_cru/dados_cru_train/dado_coletado_xxx/hotfilm_xxx.csv
-        dados/dados_cru/dados_cru_train/dado_coletado_xxx/sonic_xxx.csv
+        data/raw_data/raw_train/collected_data_xxx/hotfilm_xxx.csv
+        data/raw_data/raw_train/collected_data_xxx/sonic_xxx.csv
         
     -> Exemplos:
-        dado_coletado_xxx
+        collected_data_xxx
         └──> hotfilm_xxx.csv
         └──> sonic_xxx.csv
 
-        dado_coletado_leitura1
+        collected_data_leitura1
         └──> hotfilm_leitura1.csv
         └──> sonic_leitura1.csv
         
         obs: os arquivos dever ter o mesmo identificador de série da pasta:
 
     3. Com os dados dentro da pasta, cria-se o dataframe final que será usado para o treino, para isso, execute:
-        $ python3 csv_maker.py train {serie que remete à pasta dentro de dados_cru_train} 
+        $ python3 csv_maker.py train {serie que remete à pasta dentro de raw_train} 
 
         -> Exemplo:
             $  python3 csv_maker.py train xxx
     
     4. Com o dataset de treinamento pronto e dentro da pasta:
-        dados/treino/
+        data/train/
 
        Pode-se começar o treinamento, com o seguinte comando:
             $ python3 train_mlp.py {serie} 
@@ -63,7 +63,7 @@ Train:
     5. Resultados:
         Os meta dados serão salvos na pasta:
 
-            dados/treino/resultados_train/
+            data/train/train_results/
             Neste diretório acima será inserida uma planilha com as informações do
             treinamento e o nome do modelo respectivo a esse treinamento
             
@@ -88,20 +88,20 @@ Run:
         - Um modelo já treinado que esteja dentro de `modelos/`;
         - De um dataset de dados do hotfilm em tensão (preparado a seguir)
     
-    1. Após a coleta dos dados de tensão do hotfilm em 2kHz em .csv, crie uma pasta única no formato dado_coletado_xxx dentro do diretório:
-        dados/dados_cru/dados_cru_run
+    1. Após a coleta dos dados de tensão do hotfilm em 2kHz em .csv, crie uma pasta única no formato collected_data_xxx dentro do diretório:
+        data/raw_data/raw_data_run
         
     2. Depois de criada, a pasta deve conter o dataset hotfilm_xyz.csv da seguinte forma:
-        dados/dados_cru/dados_cru_run/dado_coletado_xyz/hotfilm_xyz.csv
+        data/raw_data/raw_data_run/collected_data_xyz/hotfilm_xyz.csv
         
         Exemplos:
-        dado_coletado_xyz
+        collected_data_xyz
         └──> hotfilm_xyz.csv
 
-        dado_coletado_leitura1
+        collected_data_leitura1
         └──> hotfilm_leitura1.csv
         
-        dado_coletado_ensaio23
+        collected_data_ensaio23
         └──> hotfilm_ensaio23.csv
         
         obs: o arquivo dever ter o mesmo identificador de série da pasta:
@@ -114,7 +114,7 @@ Run:
         $ python3 csv_maker.py run xyz
 
         Será salvo um arquivo único `run_xyz.csv` dentro do diretório
-          dados/run
+          data/run
     
     4. Após essa preparação dos dados, execute o seguinte comando para processar os dados dentro da rede neural:
 
@@ -125,12 +125,12 @@ Run:
 
         Obs: Não esqueça de colocar o nome do modelo idêntico ao encontrado dentro da pasta `modelos/` junto de sua extensão .pth
     O resultado da execução será salvo dentro de uma pasta (velocity_xyz) com o mesmo identificador de série em: 
-        dados/run/resultados_run
+        data/run/resultados_run
 
     Observações:
         O modelo deve estar dentro da pasta modelos ou abaixo (há de se especificar no argumento o subdiretório)
         Os dados de entrada têm de estar em .csv do seguinte formato:   | time, voltage_x, voltage_y, voltage_z |
-        Os dados salvos serão encontrados em dados/gerados/ em uma pasta específica desse processamento com o identificador de série.
+        Os dados salvos serão encontrados em data/gerados/ em uma pasta específica desse processamento com o identificador de série.
 
 Espectro: 
     Geração do espectro 
@@ -145,4 +145,4 @@ Espectro:
         com o identificador de série relativo {SERIE} dentro da pasta.
 
     -> Exemplo de arquivo que será buscado caso xxx seja o identificador:    
-        /dados/run/velocity_xxx/velocity_xxx.csv
+        /data/run/velocity_xxx/velocity_xxx.csv

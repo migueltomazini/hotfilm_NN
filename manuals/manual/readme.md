@@ -26,20 +26,20 @@ Para treinar um modelo, precisa-se de:
 - Um conjunto de dados de velocidade por tempo a 20Hz do sensor sônico.
 
 1. **Preparação dos dados para treino**:
-    Após a coleta dos dados em `.csv`, crie uma pasta única no formato `dado_coletado_xxx` dentro do diretório:
+    Após a coleta dos dados em `.csv`, crie uma pasta única no formato `collected_data_xxx` dentro do diretório:
     ```
-    dados/dados_cru/dados_cru_treino
+    data/raw_data/raw_train
     ```
 
 2. **Organização dos arquivos**:
     Depois de criada, a pasta deve conter dois arquivos: `hotfilm_xxx.csv` e `sonic_xxx` da seguinte forma:
     ```
-    dados/dados_cru/dados_cru_train/dado_coletado_xxx/hotfilm_xxx.csv
-    dados/dados_cru/dados_cru_train/dado_coletado_xxx/sonic_xxx.csv
+    data/raw_data/raw_train/collected_data_xxx/hotfilm_xxx.csv
+    data/raw_data/raw_train/collected_data_xxx/sonic_xxx.csv
     ```
     **Exemplos**:
     ```
-    dado_coletado_xxx
+    collected_data_xxx
     ├── hotfilm_xxx.csv
     └── sonic_xxx.csv
     ```
@@ -57,7 +57,7 @@ Para treinar um modelo, precisa-se de:
 4. **Início do treinamento**:
     Com o dataset de treinamento pronto e dentro da pasta:
     ```
-    dados/treino/
+    data/train/
     ```
     Pode-se começar o treinamento, com o seguinte comando:
     ```bash
@@ -72,7 +72,7 @@ Para treinar um modelo, precisa-se de:
 5. **Resultados**:
     Os metadados serão salvos na pasta:
     ```
-    dados/treino/resultados_train/
+    data/train/train_results/
     ```
     Neste diretório acima será inserida uma planilha com as informações do treinamento e o nome do modelo respectivo a esse treinamento.
     O modelo será salvo na pasta `modelos/` como:
@@ -99,20 +99,20 @@ Para isso, precisa-se de:
 - De um dataset de dados do hotfilm em tensão (preparado a seguir).
 
 1. **Organização dos arquivos**:
-    Após a coleta dos dados de tensão do hotfilm em 2kHz em `.csv`, crie uma pasta única no formato `dado_coletado_xxx` dentro do diretório:
+    Após a coleta dos dados de tensão do hotfilm em 2kHz em `.csv`, crie uma pasta única no formato `collected_data_xxx` dentro do diretório:
     ```
-    dados/dados_cru/dados_cru_run
+    data/raw_data/raw_run
     ```
 
 2. **Estrutura da pasta**:
     Depois de criada, a pasta deve conter o dataset `hotfilm_xyz.csv` da seguinte forma:
     ```
-    dados/dados_cru/dados_cru_run/dado_coletado_xyz/hotfilm_xyz.csv
+    data/raw_data/raw_run/collected_data_xyz/hotfilm_xyz.csv
     ```
 
     **Exemplos**:
     ```
-    dado_coletado_xyz
+    collected_data_xyz
     └── hotfilm_xyz.csv
     ```
 
@@ -125,7 +125,7 @@ Para isso, precisa-se de:
     ```bash
     $ python3 csv_maker.py run xyz
     ```
-    Será salvo um arquivo único `run_xyz.csv` dentro do diretório `dados/run`.
+    Será salvo um arquivo único `run_xyz.csv` dentro do diretório `data/run`.
 
 4. **Processamento dos dados**:
     Após essa preparação dos dados, execute o seguinte comando para processar os dados dentro da rede neural:
@@ -139,14 +139,14 @@ Para isso, precisa-se de:
     **Obs:** Não esqueça de colocar o nome do modelo idêntico ao encontrado dentro da pasta `modelos/` junto de sua extensão `.pth`.
     O resultado da execução será salvo dentro de uma pasta (`velocity_xyz`) com o mesmo identificador de série em:
     ```
-    dados/run/resultados_run
+    data/run/run_results
     ```
 
 ### Observações
 
 - O modelo deve estar dentro da pasta `modelos` ou abaixo (há de se especificar no argumento o subdiretório).
 - Os dados de entrada têm de estar em `.csv` do seguinte formato: `| time, voltage_x, voltage_y, voltage_z |`.
-- Os dados salvos serão encontrados em `dados/gerados/` em uma pasta específica desse processamento com o identificador de série.
+- Os dados salvos serão encontrados em `data/gerados/` em uma pasta específica desse processamento com o identificador de série.
 
 ## Geração do Espectro
 
@@ -163,5 +163,5 @@ Para isso, precisa-se de:
 
     **Exemplo de arquivo que será buscado caso xxx seja o identificador**:
     ```
-    /dados/run/velocity_xxx/velocity_xxx.csv
+    /data/run/velocity_xxx/velocity_xxx.csv
     ```

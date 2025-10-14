@@ -1,5 +1,5 @@
 <div style="display: flex; align-items: center;">
-  <img src="logo_grupo.jpg" alt="Grupo de Pesquisa em Mecânica dos Fluidos Computacional - ICMC - USP" width="100" height="100" style="margin-right: 20px;">
+  <img src="TUCA_logo.jpg" alt="Grupo de Pesquisa em Mecânica dos Fluidos Computacional - ICMC - USP" width="100" height="100" style="margin-right: 20px;">
   <h1>Conversão de Dados Anemométricos com Rede Neural MLP</h1>
 </div>
 

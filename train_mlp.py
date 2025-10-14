@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 info_output = '''
 
 Confira o manual dentro da pasta a seguir para colocar os dados corretos para treinamento:
-    manuais/manual.txt
+    manuals/manual.txt
 
 '''
 ''' 
@@ -61,7 +61,7 @@ LOCAL = 1             # 0 para no cluster                   | 1 para TREINO no n
 START_TIME = time.time()
 input_df_name = "voltage"
 output_df_name = "velocity"
-model_local = './modelos'
+model_local = './models'
 caminho_local = '.'
 caminho_cluster = '/home/lucasdu/algoritmo/2_cluster_architecture'
 dir_base = ''
@@ -88,12 +88,12 @@ SERIE = sys.argv[1]            # Nome do treino em si - serie
 
 
 # Carregar a rede 
-df_train = pd.read_csv(f'{dir_base}/dados/treino/train_df_{SERIE}.csv', sep=",")
+df_train = pd.read_csv(f'{dir_base}/data/train/train_df_{SERIE}.csv', sep=",")
 
 # Cabeçalho 
 print(f' -- -- Tipos dos dados do df -- --  \n----------------------------\n{df_train.dtypes}\n----------------------------')
-local_data = (f'{dir_base}/dados/treino/train_df_{SERIE}.csv')              #   Local dos dados de entrada tensão
-local_destino = (f"{dir_base}/dados/treino/resultados_train/resultado_{SERIE}")                             #   Local de saida desejado para os resultados da rede
+local_data = (f'{dir_base}/data/train/train_df_{SERIE}.csv')              #   Local dos dados de entrada tensão
+local_destino = (f"{dir_base}/data/train/train_results/results_{SERIE}")                             #   Local de saida desejado para os resultados da rede
 print("\n\n -- -- -- -- - -- -- -- ")
 print("Nome de série:\t",SERIE)
 print("\n\n Rede processando dados")
@@ -165,13 +165,13 @@ def export_data(df, predictions, see_train_loss, see_val_loss, accuracy, dir_bas
     df_exp = df[['time',f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z',f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']]
     df_exp = df_exp.join(predictions)
 
-    caminho_completo = os.path.join(dir_base_local, f'dados/treino/resultados_train/resultado_{SERIE}')
+    caminho_completo = os.path.join(dir_base_local, f'data/train/train_results/results_{SERIE}')
     if not os.path.exists(caminho_completo):
         os.makedirs(caminho_completo)
     print('\nArquivo final:\n',df_exp)
-    df_exp.to_csv(f'{caminho_completo}/resultado_predict_{SERIE}.csv', index=False)
-    see_train_loss.to_csv(f'{caminho_completo}/resultado_train_{SERIE}.csv', index=False)
-    see_val_loss.to_csv(f'{caminho_completo}/resultado_val_{SERIE}.csv', index=False)
+    df_exp.to_csv(f'{caminho_completo}/results_predict_{SERIE}.csv', index=False)
+    see_train_loss.to_csv(f'{caminho_completo}/results_train_{SERIE}.csv', index=False)
+    see_val_loss.to_csv(f'{caminho_completo}/results_val_{SERIE}.csv', index=False)
     diff_media, diff_max, diff_min = trained_info(measure_df, predictions)
     print(
         f'\nMédia da diferença:\t{diff_media:6.6f}\nMáxima diferença:\t{diff_max:6.6f}\nMínima diferença:\t{diff_min:6.6f}\n')
@@ -210,8 +210,8 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
         shown = pd.DataFrame(shown.squeeze().cpu().numpy(), columns = ['eixo_x','eixo_y','eixo_z'])
 
     # Criação da pasta na qual os gráficos serão salvos (train)
-    if not os.path.exists(f"dados/run/resultados_run/velocity_{SERIE}/graphics/"):
-        os.mkdir(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/")
+    if not os.path.exists(f"data/run/run_results/velocity_{SERIE}/graphics/"):
+        os.mkdir(f"data/train/train_results/results_{SERIE}/graphics/")
     
     # shown = shown.assign(original_x=data[[f'{output_df_name}_x']],original_y=data[[f'{output_df_name}_y']],original_z   =data[[f'{output_df_name}_z    ']])
     see_train_loss = pd.DataFrame(see_train_loss)
@@ -226,7 +226,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo X")
-    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Velocidade por tempo eixo x.png", format='png')
+    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Velocidade por tempo eixo x.png", format='png')
     plt.legend()
     
     plt.figure(1)
@@ -236,7 +236,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo Y")
-    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Velocidade por tempo eixo y.png", format='png')
+    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Velocidade por tempo eixo y.png", format='png')
     plt.legend()
     
     plt.figure(2)
@@ -245,7 +245,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo Z")
-    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Velocidade por tempo eixo z.png", format='png')
+    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Velocidade por tempo eixo z.png", format='png')
     plt.legend()
     
     plt.figure(3)
@@ -253,7 +253,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.plot(see_train_loss[see_train_loss.columns[0]], see_train_loss[see_train_loss.columns[1]],color='g', label='train')
     plt.xlabel("Interação")
     plt.ylabel("Erro")
-    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Erro do treino.png", format='png')
+    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Erro do treino.png", format='png')
     plt.legend()
 
     plt.figure(4)
@@ -261,7 +261,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.plot(see_val_loss[see_val_loss.columns[0]], see_val_loss[see_val_loss.columns[1]],color='r', label='validation')
     plt.xlabel("Interação")
     plt.ylabel("Erro")
-    plt.savefig(f"dados/treino/resultados_train/resultado_{SERIE}/graphics/Erro de validação.png", format='png')
+    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Erro de validação.png", format='png')
     plt.legend()
 
     # Mostrar os gráficos

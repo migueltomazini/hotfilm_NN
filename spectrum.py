@@ -7,7 +7,7 @@ from scipy.signal import periodogram
 
 info_output = '''
 Confira o manual dentro da pasta a seguir para colocar os dados corretos para gerar o espectro:
-    manuais/manual.txt
+    manuals/manual.txt
 '''
 
 if len(sys.argv) < 2 or len(sys.argv) > 3:
@@ -16,8 +16,8 @@ if len(sys.argv) < 2 or len(sys.argv) > 3:
 
 SERIE = sys.argv[1]
 # Ler os dados a serem processados
-data_predicted = pd.read_csv(f'./dados/run/resultados_run/velocity_{SERIE}/velocity_{SERIE}.csv', sep=',')
-data_sonic = pd.read_csv(f'./dados/treino/train_df_{SERIE}.csv', sep=',')
+data_predicted = pd.read_csv(f'./data/run/run_results/velocity_{SERIE}/velocity_{SERIE}.csv', sep=',')
+data_sonic = pd.read_csv(f'./data/train/train_df_{SERIE}.csv', sep=',')
 
 # Cria-se a curva referência de ângulo de -5/3 de inclinação no plot log log
 x_aux = np.linspace(1, 1000, 1000, endpoint=False)
@@ -37,8 +37,8 @@ def show_periodogram(fig_num, data_predicted, data_sonic):
     """
 
     # Criação da pasta na qual os gráficos serão salvos (run)
-    if not os.path.exists(f"dados/run/resultados_run/velocity_{SERIE}/graphics/"):
-        os.mkdir(f"dados/run/resultados_run/velocity_{SERIE}/graphics/")
+    if not os.path.exists(f"data/run/run_results/velocity_{SERIE}/graphics/"):
+        os.mkdir(f"data/run/run_results/velocity_{SERIE}/graphics/")
 
     plt.figure(fig_num)
 
@@ -54,7 +54,7 @@ def show_periodogram(fig_num, data_predicted, data_sonic):
     plt.ylabel("Densidade Espectral")
 
     plt.title(f"Periodograma da linha temporal de {data_sonic.name} prevista e sônica (real)")
-    plt.savefig(f"dados/run/resultados_run/velocity_{SERIE}/graphics/Períodograma {data_sonic.name}.png", format='png')
+    plt.savefig(f"data/run/run_results/velocity_{SERIE}/graphics/Periodogram {data_sonic.name}.png", format='png')
     plt.legend()
 
 show_periodogram(0, data_predicted['velocity_predicted_x'], data_sonic['velocity_x'])
