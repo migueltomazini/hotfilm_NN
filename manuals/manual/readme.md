@@ -148,20 +148,70 @@ Para isso, precisa-se de:
 - Os dados de entrada têm de estar em `.csv` do seguinte formato: `| time, voltage_x, voltage_y, voltage_z |`.
 - Os dados salvos serão encontrados em `data/gerados/` em uma pasta específica desse processamento com o identificador de série.
 
-## Geração do Espectro
+## Geração do Espectro e Análise da Dissipação ($\epsilon$)
 
-1. Execute o comando a seguir para criar um gráfico com o espectro do sinal de velocidade gerado através do processamento de um conjunto de dados de tensão por um modelo.
+O script `spectrum.py` é utilizado para gerar o gráfico da Densidade Espectral de Potência (DEP) da velocidade predita e do sônico (para comparação) e, opcionalmente, calcular a **Taxa de Dissipação de Energia Cinética da Turbulência ($\epsilon$)** e validar o código de integração contra modelos teóricos.
+
+### 1\. Requisitos Adicionais de Dados
+
+Para que o `spectrum.py` execute os cálculos de Dissipação ($\epsilon$) e Validação, dois arquivos adicionais, contendo constantes e dados teóricos, são necessários:
+
+#### a. Arquivo de Configuração (JSON)
+
+Este arquivo armazena constantes físicas e parâmetros de cálculo específicos para a série, permitindo que o código rode sem modificar as variáveis internas.
+
+1.  Crie uma pasta `config` dentro de `data/`.
+2.  O arquivo deve ser nomeado no formato `config_{SERIE}.json` e salvo em:
+    ```
+    data/config/config_{SERIE}.json
+    ```
+
+**Estrutura de Exemplo (`config_xxx.json`):**
+
+```json
+{
+    "KINEMATIC_VISCOSITY": 1.516e-5,    // Viscosidade Cinemática ($\nu$)
+    "FS_HOTFILM": 2000,                 // Frequência de Amostragem do Hot-film (Hz)
+    "FS_SONIC": 20,                     // Frequência de Amostragem do Sônico (Hz)
+    "EPSILON_EXPECTED": 0.0106,         // Valor de $\epsilon$ esperado para a condição da série
+    "THEORETICAL_MODEL": {
+        "PATH": "data/raw_data/models_spec5940.dat", // Caminho para o arquivo teórico
+        "E11_COLUMN": 1,                    // Índice da coluna do espectro longitudinal E11 (e.g., Meyers-Meneveau)
+        "E_TRANS_COLUMN": 2                 // Índice da coluna do espectro transversal E_trans (e.g., Meyers-Meneveau)
+    }
+}
+```
+
+#### b. Arquivo de Espectro Teórico (Para Validação)
+
+Este arquivo, mencionado em `THEORETICAL_MODEL:PATH` no JSON, contém dados de espectro gerados por modelos matemáticos, essenciais para validar a precisão da sua função de integração de $\epsilon$.
+
+1.  O arquivo (ex: `models_spec5940.dat`) deve conter colunas separadas por espaço.
+2.  A **primeira coluna** deve ser o **Número de Onda ($k$)**.
+3.  As colunas subsequentes devem ser os valores de $E(k)$.
+
+### 2\. Execução e Opções de Análise
+
+1.  Execute o comando a seguir, fornecendo o identificador da série:
+
     ```bash
     $ python3 spectrum.py {SERIE}
     ```
+
     **Exemplo**:
+
     ```bash
     $ python3 spectrum.py xxx
     ```
 
-    **Obs:** O dataframe que será utilizado pelo espectro é o que tiver na pasta com o identificador de série relativo `{SERIE}` dentro da pasta.
+2.  Após o início, o script apresentará duas perguntas que controlam os cálculos:
 
-    **Exemplo de arquivo que será buscado caso xxx seja o identificador**:
-    ```
-    /data/run/velocity_xxx/velocity_xxx.csv
-    ```
+    | Pergunta | Cálculo Relacionado | Necessidade do JSON |
+    | :--- | :--- | :--- |
+    | **"Você deseja calcular a Taxa de Dissipação ($\epsilon$) a partir do modelo predito?"** | Calcula a $\epsilon$ utilizando os espectros suavizados da série predita (o resultado do seu modelo RN). | **Sim**, usa todas as constantes do JSON. |
+    | **"Você deseja realizar o Teste de Validação Teórica?"** | Verifica a precisão da função de integração, usando o arquivo teórico (Seção 1b). | **Sim**, usa $\epsilon_{EXPECTED}$ e `THEORETICAL_MODEL` do JSON. |
+
+### 3\. Detalhes da Geração do Espectro
+
+  * **Periodograma Plotado:** O gráfico exibido utiliza o **espectro bruto** (não suavizado) do sinal de flutuações, para garantir a visualização direta de todo o ruído e estrutura do sinal.
+  * **Cálculo da Dissipação ($\epsilon$):** A taxa $\epsilon$ é calculada apenas se o usuário optar por isso. A integração é feita sobre os espectros das três componentes de velocidade ($E_{11}, E_{22}, E_{33}$), que são previamente **suavizados por média em bins logarítmicos** para estabilizar o cálculo numérico. O resultado é comparado com o `EPSILON_EXPECTED` do arquivo JSON.
