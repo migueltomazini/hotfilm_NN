@@ -34,7 +34,7 @@ needs_config = calc_epsilon_model or calc_validation_test
 # Leitura do arquivo de configuração JSON (Condicional)
 # -------------------------------------------------------------
 # Variáveis default caso o JSON não seja lido
-KINEMATIC_VISCOSITY = 15.16e-6  # Valor padrão do artigo
+KINEMATIC_VISCOSITY = 15.16e-6
 FS_HOTFILM = 2000
 FS_SONIC = 20
 EPSILON_EXPECTED = 1.0  # Valor placeholder
@@ -206,25 +206,6 @@ def process_data(fig_num, data_predicted, data_sonic, u_component, calculate_eps
     freqs_predicted, power_spectrum_predicted_raw = periodogram(data_predicted, fs=FS_HOTFILM)
     freqs_sonic, power_spectrum_sonic_raw = periodogram(data_sonic, fs=FS_SONIC)
     
-    # -------------------------------------------------------------
-    # PLOTAGEM DO ESPECTRO BRUTO
-    # -------------------------------------------------------------
-    
-    # O periodograma é impresso com os dados não suavizados
-    plt.loglog(freqs_predicted, power_spectrum_predicted_raw, label=data_predicted.name, alpha=0.85)
-    plt.loglog(freqs_sonic, power_spectrum_sonic_raw, label=data_sonic.name, alpha=0.85)
-    plt.loglog(x_aux, y_aux, label='Linha auxiliar de inclinação (-5/3)', alpha=.9, linewidth=2.5)
-
-    # Ajuste de Y para melhor visualização (limpa ruído de baixo valor)
-    plt.ylim(1e-18, 1e4)
-
-    plt.xlabel("Frequência")
-    plt.ylabel("Densidade Espectral")
-
-    plt.title(f"Periodograma Bruto da linha temporal de {data_sonic.name} prevista e sônica (real)")
-    plt.savefig(f"data/run/run_results/velocity_{SERIE}/graphics/Periodogram_Raw_{data_sonic.name}.png", format='png')
-    plt.legend()
-    
     if calculate_epsilon_flag:
         # -------------------------------------------------------------
         # SUAVIZAÇÃO PARA O CÁLCULO DE EPSILON (Dados suavizados)
@@ -267,6 +248,24 @@ def process_data(fig_num, data_predicted, data_sonic, u_component, calculate_eps
             except Exception as e:
                  print(f"Erro no cálculo final de epsilon: {e}")
 
+    # -------------------------------------------------------------
+    # PLOTAGEM DO ESPECTRO BRUTO
+    # -------------------------------------------------------------
+    plt.loglog(freqs_predicted, power_spectrum_predicted_raw, label=data_predicted.name, alpha=0.85)
+    plt.loglog(freqs_sonic, power_spectrum_sonic_raw, label=data_sonic.name, alpha=0.85)
+    plt.loglog(x_aux, y_aux, label='Linha auxiliar de inclinação (-5/3)', alpha=.9, linewidth=2.5)
+    if calc_epsilon_model == True:
+        plt.loglog(freqs_predicted_smooth, power_spectrum_predicted_smooth, label=data_predicted.name, alpha=0.85)
+
+    # Ajuste de Y para melhor visualização (limpa ruído de baixo valor)
+    plt.ylim(1e-18, 1e4)
+
+    plt.xlabel("Frequência")
+    plt.ylabel("Densidade Espectral")
+
+    plt.title(f"Periodograma da linha temporal de {data_sonic.name} prevista e sônica (real)")
+    plt.legend()
+    plt.savefig(f"data/run/run_results/velocity_{SERIE}/graphics/Periodogram_{data_sonic.name}.png", format='png')
 
 # ==============================================================================
 # 3. EXECUÇÃO PRINCIPAL
