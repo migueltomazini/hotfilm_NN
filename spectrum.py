@@ -37,7 +37,7 @@ needs_config = calc_epsilon_model or calc_validation_test
 KINEMATIC_VISCOSITY = 15.16e-6
 FS_HOTFILM = 2000
 FS_SONIC = 20
-EPSILON_EXPECTED = 1.0  # Valor placeholder
+EPSILON_EXPECTED = 1.0  
 config = None
 
 if needs_config:
@@ -102,9 +102,17 @@ k1_1_pred, k1_2_pred, k1_3_pred = None, None, None
 # 2. FUNÇÕES DE CÁLCULO E PROCESSAMENTO
 # ==============================================================================
 
-def log_bin_smoothing(freqs, spectrum, bins_per_decade=30):
+def log_bin_smoothing(freqs: np.ndarray, spectrum: np.ndarray, bins_per_decade: int = 30) -> tuple[np.ndarray, np.ndarray]:
     """
     Suaviza o espectro usando média em bins logarítmicos.
+
+    Args:
+        freqs: Array de frequências.
+        spectrum: Array da Densidade Espectral de Potência.
+        bins_per_decade: Número de bins logarítmicos por década.
+
+    Returns:
+        Um tuple contendo o array de frequências suavizadas e o espectro suavizado.
     """
     # Remove frequências zero e valores de espectro zero/negativos
     valid_indices = (freqs > 0) & (spectrum > 0)
@@ -138,9 +146,17 @@ def log_bin_smoothing(freqs, spectrum, bins_per_decade=30):
             
     return np.array(smooth_freqs), np.array(smooth_spectrum)
 
-def calculate_dissipation_rate_theoretical(E11_k, k1_1, E22_k, k1_2, E33_k, k1_3, nu):
+def calculate_dissipation_rate_theoretical(E11_k: np.ndarray, k1_1: np.ndarray, E22_k: np.ndarray, k1_2: np.ndarray, E33_k: np.ndarray, k1_3: np.ndarray, nu: float) -> float:
     """
-    Calcula epsilon DIRETAMENTE de espectros teóricos E(k).
+    Calcula epsilon DIRETAMENTE de espectros teóricos E(k) pela integração (Equação 5).
+
+    Args:
+        E11_k, E22_k, E33_k: Espectros de energia das três componentes.
+        k1_1, k1_2, k1_3: Números de onda correspondentes.
+        nu: Viscosidade cinemática.
+
+    Returns:
+        Taxa de dissipação de energia (epsilon).
     """
     
     # 1. Termo da componente streamwise (u1)
@@ -163,8 +179,18 @@ def calculate_dissipation_rate_theoretical(E11_k, k1_1, E22_k, k1_2, E33_k, k1_3
     
     return epsilon
 
-def spectral_density_to_energy_spectrum(S_f, freqs, mean_velocity):
-    """Converte DEP (S_f) para Espectro de Energia E(k1) usando a Hipótese de Taylor."""
+def spectral_density_to_energy_spectrum(S_f: np.ndarray, freqs: np.ndarray, mean_velocity: float) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Converte DEP (S_f) para Espectro de Energia E(k1) usando a Hipótese de Taylor.
+    
+    Args:
+        S_f: Densidade Espectral de Potência.
+        freqs: Frequências.
+        mean_velocity: Velocidade média longitudinal.
+
+    Returns:
+        Um tuple contendo o Espectro de Energia E(k1) e o Número de Onda k1.
+    """
     if mean_velocity == 0:
         return np.array([]), np.array([])
         
@@ -173,8 +199,18 @@ def spectral_density_to_energy_spectrum(S_f, freqs, mean_velocity):
     
     return energy_spectrum, wavenumbers
 
-def calculate_dissipation_rate(E11, k1_1, E22, k1_2, E33, k1_3, nu):
-    """Calcula epsilon pela integração (Equação 5)."""
+def calculate_dissipation_rate(E11: np.ndarray, k1_1: np.ndarray, E22: np.ndarray, k1_2: np.ndarray, E33: np.ndarray, k1_3: np.ndarray, nu: float) -> float:
+    """
+    Calcula epsilon pela integração da Equação (5) a partir de espectros medidos.
+
+    Args:
+        E11, E22, E33: Espectros de energia das três componentes.
+        k1_1, k1_2, k1_3: Números de onda correspondentes.
+        nu: Viscosidade cinemática.
+
+    Returns:
+        Taxa de dissipação de energia (epsilon).
+    """
     
     # 1. Termo u1
     term1 = 15.0 * nu * np.trapz(k1_1**2 * E11, k1_1)
@@ -190,10 +226,17 @@ def calculate_dissipation_rate(E11, k1_1, E22, k1_2, E33, k1_3, nu):
     return epsilon
 
 
-def process_data(fig_num, data_predicted, data_sonic, u_component, calculate_epsilon_flag):
+def process_data(fig_num: int, data_predicted: np.ndarray, data_sonic: np.ndarray, u_component: str, calculate_epsilon_flag: bool):
     """
-    Calcula o periodograma (bruto e suavizado), plota o espectro bruto e 
+    Função principal que calcula o periodograma, plota o espectro bruto e 
     armazena os dados suavizados para o cálculo de epsilon.
+
+    Args:
+        fig_num: Número da figura Matplotlib.
+        data_predicted: Série de flutuações preditas.
+        data_sonic: Série de flutuações sônicas.
+        u_component: Nome da componente de velocidade.
+        calculate_epsilon_flag: Flag para determinar se o cálculo de epsilon deve ser executado.
     """
 
     # Criação da pasta onde os gráficos serão salvos
@@ -254,8 +297,10 @@ def process_data(fig_num, data_predicted, data_sonic, u_component, calculate_eps
     plt.loglog(freqs_predicted, power_spectrum_predicted_raw, label=data_predicted.name, alpha=0.85)
     plt.loglog(freqs_sonic, power_spectrum_sonic_raw, label=data_sonic.name, alpha=0.85)
     plt.loglog(x_aux, y_aux, label='Linha auxiliar de inclinação (-5/3)', alpha=.9, linewidth=2.5)
-    if calc_epsilon_model == True:
-        plt.loglog(freqs_predicted_smooth, power_spectrum_predicted_smooth, label=data_predicted.name, alpha=0.85)
+
+    # Adiciona o espectro suavizado ao plot se o cálculo de epsilon foi solicitado (para visualização)
+    if calculate_epsilon_flag and 'freqs_predicted_smooth' in locals():
+        plt.loglog(freqs_predicted_smooth, power_spectrum_predicted_smooth, label='Suavizado (Cálculo)', alpha=0.85)
 
     # Ajuste de Y para melhor visualização (limpa ruído de baixo valor)
     plt.ylim(1e-18, 1e4)
@@ -264,8 +309,69 @@ def process_data(fig_num, data_predicted, data_sonic, u_component, calculate_eps
     plt.ylabel("Densidade Espectral")
 
     plt.title(f"Periodograma da linha temporal de {data_sonic.name} prevista e sônica (real)")
-    plt.legend()
-    plt.savefig(f"data/run/run_results/velocity_{SERIE}/graphics/Periodogram_{data_sonic.name}.png", format='png')
+    plt.legend(loc='lower left')
+    plt.savefig(f"data/run/run_results/velocity_{SERIE}/graphics/Periodogram_{data_sonic.name}.png", format='png', bbox_inches='tight')
+
+# --- Nova Função de Verificação da Velocidade Perfeita ---
+
+def check_perfect_velocity_dissipation():
+    """
+    Calcula a dissipação (ε) a partir do arquivo de dados de velocidade perfeita 
+    (hotfilm-fake-vel-5940.csv) e compara com o valor esperado.
+    """
+    print("\n--- TESTE DE VERIFICAÇÃO DE DISSIPAÇÃO COM VELOCIDADE PERFEITA ---")
+    
+    PERFECT_VEL_PATH = f"data/raw_data/raw_train/collected_data_{SERIE}/hotfilm-fake-vel-{SERIE}.csv"
+    
+    try:
+        # Carrega os dados sem usar a primeira linha como cabeçalho
+        data_perfect = pd.read_csv(PERFECT_VEL_PATH, header=None) 
+        
+        # Define os nomes das colunas manualmente.
+        # Assumimos que as colunas de índice 0, 1 e 2 contêm as velocidades x, y, z.
+        data_perfect.columns = ['time', 'velocity_x', 'velocity_y', 'velocity_z'] 
+        
+    except FileNotFoundError:
+        print(f"AVISO: Arquivo de velocidade perfeita não encontrado em: {PERFECT_VEL_PATH}")
+        return
+    except Exception as e:
+        print(f"ERRO ao ler ou renomear o arquivo de velocidade perfeita: {e}")
+        return
+
+    # 1. Calcular Flutuações (u' = u - u_bar)
+    u_perfect_fluc = {
+        # Esta linha agora funcionará
+        'x': data_perfect['velocity_x'] - data_perfect['velocity_x'].mean(), 
+        'y': data_perfect['velocity_y'] - data_perfect['velocity_y'].mean(),
+        'z': data_perfect['velocity_z'] - data_perfect['velocity_z'].mean()
+    }
+
+    # 2. Calcular Espectros Brutos
+    freqs_x, S_x = periodogram(u_perfect_fluc['x'], fs=FS_HOTFILM)
+    freqs_y, S_y = periodogram(u_perfect_fluc['y'], fs=FS_HOTFILM)
+    freqs_z, S_z = periodogram(u_perfect_fluc['z'], fs=FS_HOTFILM)
+    
+    # 3. Suavizar para a Integração
+    freqs_x_smooth, S_x_smooth = log_bin_smoothing(freqs_x, S_x)
+    freqs_y_smooth, S_y_smooth = log_bin_smoothing(freqs_y, S_y)
+    freqs_z_smooth, S_z_smooth = log_bin_smoothing(freqs_z, S_z)
+
+    # 4. Converter DEP (S_f) para E(k1)
+    E_x, k_x = spectral_density_to_energy_spectrum(S_x_smooth, freqs_x_smooth, MEAN_VELOCITY)
+    E_y, k_y = spectral_density_to_energy_spectrum(S_y_smooth, freqs_y_smooth, MEAN_VELOCITY)
+    E_z, k_z = spectral_density_to_energy_spectrum(S_z_smooth, freqs_z_smooth, MEAN_VELOCITY)
+
+    # 5. Calcular Dissipação (ε)
+    try:
+        epsilon_perfect = calculate_dissipation_rate(E_x, k_x, E_y, k_y, E_z, k_z, KINEMATIC_VISCOSITY)
+        
+        print(f"ε calculado da Velocidade Perfeita: {epsilon_perfect:.4e} [m^2/s^3]")
+        print(f"Valor Esperado (EPSILON_EXPECTED): {EPSILON_EXPECTED:.4e} [m^2/s^3]")
+        print(f"Diferença relativa: {abs(epsilon_perfect - EPSILON_EXPECTED) / EPSILON_EXPECTED * 100:.2f} %")
+        
+    except Exception as e:
+        print(f"ERRO no cálculo de dissipação da Velocidade Perfeita: {e}")
+
 
 # ==============================================================================
 # 3. EXECUÇÃO PRINCIPAL
@@ -281,15 +387,15 @@ process_data(2, u_predicted_fluc['velocity_z'], u_sonic_fluc['velocity_z'], 'vel
 
 if calc_validation_test and config is not None:
     
-    # O teste de validação utiliza constantes lidas do arquivo de configuração
+    # O teste de validação teórica utiliza constantes lidas do arquivo de configuração
     try:
+        # Verifica a dissipação usando os dados de velocidade gerados pelo modelo teórico (arquivo .dat)
         theoretical_data = pd.read_csv(
             config['THEORETICAL_MODEL']['PATH'],
             header=None,
             sep=r'\s+'
         )
 
-        # Colunas são definidas no arquivo de configuração
         E11_COL = config['THEORETICAL_MODEL']['E11_COLUMN']
         E_TRANS_COL = config['THEORETICAL_MODEL']['E_TRANS_COLUMN']
         
@@ -297,19 +403,17 @@ if calc_validation_test and config is not None:
         E11_MM = theoretical_data.iloc[:, E11_COL].values
         E_trans_MM = theoretical_data.iloc[:, E_TRANS_COL].values
         
-        # Para o teste, assume-se isotropia transversal (E22 = E33 = E_trans)
+        # Assume isotropia transversal para o cálculo teórico (E22 = E33 = E_trans)
         epsilon_test = calculate_dissipation_rate_theoretical(
             E11_MM, k1_theoretical, 
             E_trans_MM, k1_theoretical, 
-            E_trans_MM, k1_theoretical, # Usamos E_trans para E33
+            E_trans_MM, k1_theoretical, 
             KINEMATIC_VISCOSITY
         )
         
         epsilon_expected_test = EPSILON_EXPECTED 
 
         print(f"\n-----------------------------------------------------------")
-        print(f"VALOR DE REFERÊNCIA ESPERADO (do modelo teórico): ε = {epsilon_expected_test:.4e} [m^2/s^3]")
-        print(f"-----------------------------------------------------------")
         print(f"TESTE DE VALIDAÇÃO (Modelo Teórico de Meyers e Meneveau):")
         print(f"ε calculado do espectro teórico: {epsilon_test:.4e} [m^2/s^3]")
         print(f"Diferença relativa: {abs(epsilon_test - epsilon_expected_test) / epsilon_expected_test * 100:.2f} %")
@@ -320,5 +424,8 @@ if calc_validation_test and config is not None:
     except Exception as e:
         print(f"\nERRO NO TESTE DE VALIDAÇÃO: {e}")
         print("Verifique o formato das colunas no arquivo teórico e no arquivo de configuração.")
+
+    # Executa a verificação da Velocidade Perfeita
+    check_perfect_velocity_dissipation()
 
 plt.show()
