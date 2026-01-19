@@ -38,7 +38,7 @@ input_size = 3          # define o formato de entrada dos dados, no caso, 3 entr
 output_size = 3
 
 hidden_layers = 2       # 2 comum
-hidden_size = 8         # 8 comum
+hidden_size = 16         # 8 comum
 
 START_TIME = time.time()
 train_data_df=''

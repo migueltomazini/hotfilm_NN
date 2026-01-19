@@ -35,23 +35,24 @@ __status__ = "finished"
 
 # Hiper parâmetros
 
-EPOCHS = 1000    #2000
+EPOCHS = 256    #2000
 input_size = 3          # define o formato de entrada dos dados, no caso, 3 entradas para 3 saída (x,y,z)
 output_size = 3
 
-hidden_layers = 2       # 2 comum
-hidden_size = 8         # 8 comum
+hidden_layers = 2       
+
+hidden_size = 16        
 
 
-learning_rate = 0.01
-batch_size = 32
+learning_rate = 0.001
+batch_size = 16
 VERSION = 11.0       # controle de versionamento
 
 # MODOS
 EXPORT_DATA = True    # Exporta arquivos .csv para analizar o resultado da rede
 GRAPHS = True         # Mostrar os gráficos
 SAVE = True           # Salvar o modelo
-GPU =  1              # 0 para uso da CPU                   | 1 para uso da GPU 
+GPU = 0               # 0 para uso da CPU                   | 1 para uso da GPU 
 
 LOCAL = 1             # 0 para no cluster                   | 1 para TREINO no notebook
 
@@ -158,21 +159,29 @@ class VoltageVelocityDataset(Dataset):
 # Função que exporta os metadados do treinamento
 def export_data(df, predictions, see_train_loss, see_val_loss, accuracy, dir_base_local):
     
-    predictions = pd.DataFrame(predictions.squeeze().cpu().numpy(), columns=['predicted_x','predicted_y','predicted_z'])
+    # CRIAÇÃO DO DATAFRAME DE PREDIÇÕES (Corrigido para usar colunas corretas)
+    predictions_df = pd.DataFrame(predictions.squeeze().cpu().numpy(), columns=[f'predicted_x',f'predicted_y',f'predicted_z'])
+    
     see_train_loss = pd.DataFrame(see_train_loss)
     see_val_loss = pd.DataFrame(see_val_loss)
     measure_df = df[['velocity_x', 'velocity_y', 'velocity_z']]
     df_exp = df[['time',f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z',f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']]
-    df_exp = df_exp.join(predictions)
+    
+    # JUNÇÃO: Adiciona as colunas de previsão (o índice é resetado no trained_info, não aqui)
+    df_exp = df_exp.join(predictions_df)
 
     caminho_completo = os.path.join(dir_base_local, f'data/train/train_results/results_{SERIE}')
     if not os.path.exists(caminho_completo):
         os.makedirs(caminho_completo)
+        
     print('\nArquivo final:\n',df_exp)
     df_exp.to_csv(f'{caminho_completo}/results_predict_{SERIE}.csv', index=False)
     see_train_loss.to_csv(f'{caminho_completo}/results_train_{SERIE}.csv', index=False)
     see_val_loss.to_csv(f'{caminho_completo}/results_val_{SERIE}.csv', index=False)
-    diff_media, diff_max, diff_min = trained_info(measure_df, predictions)
+    
+    # Passa o DataFrame de previsão corretamente nomeado
+    diff_media, diff_max, diff_min = trained_info(measure_df, predictions_df)
+    
     print(
         f'\nMédia da diferença:\t{diff_media:6.6f}\nMáxima diferença:\t{diff_max:6.6f}\nMínima diferença:\t{diff_min:6.6f}\n')
     model_name_local = (f'{model_local}/model_mlp_{SERIE}.pth')
@@ -187,10 +196,9 @@ def export_data(df, predictions, see_train_loss, see_val_loss, accuracy, dir_bas
             'Accuracy (RMSE)': [accuracy],
             'Epochs': [EPOCHS],
             'hidden_layers': [hidden_layers],
-            'hidden_size': [learning_rate],
+            'hidden_size': [hidden_size], 
             'learning_rate': [learning_rate],
             'batch_size': [batch_size],
-            'hidden_size': [hidden_size],
             'model_name_local': [model_name_local],
             'train_time(s)': [time.time()-START_TIME],
             'data_treinamento': [formatted_time],
@@ -209,9 +217,10 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     if torch.is_tensor(shown):
         shown = pd.DataFrame(shown.squeeze().cpu().numpy(), columns = ['eixo_x','eixo_y','eixo_z'])
 
-    # Criação da pasta na qual os gráficos serão salvos (train)
-    if not os.path.exists(f"data/run/run_results/velocity_{SERIE}/graphics/"):
-        os.mkdir(f"data/train/train_results/results_{SERIE}/graphics/")
+    # Define o caminho completo para a pasta de gráficos e cria recursivamente
+    caminho_graficos = os.path.join(dir_base, f"data/train/train_results/results_{SERIE}/graphics/")
+    if not os.path.exists(caminho_graficos):
+        os.makedirs(caminho_graficos)
     
     # shown = shown.assign(original_x=data[[f'{output_df_name}_x']],original_y=data[[f'{output_df_name}_y']],original_z   =data[[f'{output_df_name}_z    ']])
     see_train_loss = pd.DataFrame(see_train_loss)
@@ -219,6 +228,7 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     see_train_loss = see_train_loss.drop(0)
     see_val_loss = see_val_loss.drop(0)
 
+    # Figura 0: Eixo X
     plt.figure(0)
     # Plotting both the curves simultaneously
     plt.plot(data.time, data.velocity_x, color='r',alpha=1, label='data_eixo_x')
@@ -226,9 +236,10 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo X")
-    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Velocidade por tempo eixo x.png", format='png')
     plt.legend()
+    plt.savefig(os.path.join(caminho_graficos, "Velocidade por tempo eixo x.png"), format='png')
     
+    # Figura 1: Eixo Y
     plt.figure(1)
     # print(predictions)
     plt.plot(data.time, data.velocity_y, color='r', alpha=1 , label='data_eixo_y')
@@ -236,33 +247,36 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo Y")
-    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Velocidade por tempo eixo y.png", format='png')
     plt.legend()
+    plt.savefig(os.path.join(caminho_graficos, "Velocidade por tempo eixo y.png"), format='png')
     
+    # Figura 2: Eixo Z
     plt.figure(2)
     plt.plot(data.time, data.velocity_z, color='r', alpha=1, label='data_eixo_z')
     plt.plot(data.time, shown.eixo_z, color='g', alpha=1 , label='processed_z')
     plt.xlabel("time")
     plt.ylabel("Velocity")
     plt.title("Comparação da velocidade provida da rede e do dataset no eixo Z")
-    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Velocidade por tempo eixo z.png", format='png')
     plt.legend()
+    plt.savefig(os.path.join(caminho_graficos, "Velocidade por tempo eixo z.png"), format='png')
     
+    # Figura 3: Erro de Treino
     plt.figure(3)
     plt.title("Evolução do erro de treino ao longo do tempo")
     plt.plot(see_train_loss[see_train_loss.columns[0]], see_train_loss[see_train_loss.columns[1]],color='g', label='train')
     plt.xlabel("Interação")
     plt.ylabel("Erro")
-    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Erro do treino.png", format='png')
     plt.legend()
+    plt.savefig(os.path.join(caminho_graficos, "Erro do treino.png"), format='png')
 
+    # Figura 4: Erro de Validação
     plt.figure(4)
     plt.title("Evolução do erro da validação ao longo do tempo")
     plt.plot(see_val_loss[see_val_loss.columns[0]], see_val_loss[see_val_loss.columns[1]],color='r', label='validation')
     plt.xlabel("Interação")
     plt.ylabel("Erro")
-    plt.savefig(f"data/train/train_results/results_{SERIE}/graphics/Erro de validação.png", format='png')
     plt.legend()
+    plt.savefig(os.path.join(caminho_graficos, "Erro de validação.png"), format='png')
 
     # Mostrar os gráficos
     plt.show()
@@ -330,7 +344,7 @@ def train(data):
 
 
         # Mostrar o progresso
-        if epoch % 100 == 0:
+        if epoch % 32 == 0:
             print("| Epoch {:4} | train loss {:4.4f} | val loss {:4.4f} |".format(epoch, train_loss / len(train_dataset), val_loss / len(val_dataset)),flush=True)
     print('\n\n idx_train | idx_val: ', idx_train,' | ', idx_val)
     return mlp, see_train_loss, see_val_loss
@@ -349,17 +363,41 @@ def predict(mlp, data):
         return predictions, accuracy
 
 
-def trained_info(data, predicted):
-    output_df = pd.DataFrame(data[[f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']])
-    if torch.is_tensor(predicted):
-        predicted = predicted.cpu().detach().numpy().squeeze()
+def trained_info(data, predicted_tensor):
+    # DataFrame da saída real (Ground Truth)
+    output_df = data[[f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']].copy()
+    
+    # Converte a predição para um DataFrame, usando os nomes de coluna de velocidade
+    if torch.is_tensor(predicted_tensor):
+        predicted_np = predicted_tensor.cpu().detach().numpy().squeeze()
+        # Cria o DF de previsão com colunas nomeadas para garantir a subtração
+        predicted_df = pd.DataFrame(predicted_np, columns=output_df.columns) 
+    else:
+        # Caso predictions já seja um DataFrame (erro de chamada anterior)
+        predicted_df = predicted_tensor.copy()
 
-    predicted.columns = [ 'velocity_x',  'velocity_y' , 'velocity_z']
-    diff = (predicted-output_df)
-    print('\n -> Diferença entre o esperado e o obtido do treinamento com o set de validação:\n',diff)
-    diff_media = diff.abs().mean().to_numpy()[0]
-    diff_max = diff.abs().max().to_numpy()[0]
-    diff_min = diff.abs().min().to_numpy()[0]
+    # --- CORREÇÃO DE ALINHAMENTO ---
+    # Garante que ambos os DataFrames tenham índices sequenciais (0, 1, 2, ...) 
+    # para que a subtração linha a linha seja bem-sucedida, ignorando índices esparsos.
+    output_df = output_df.reset_index(drop=True)
+    predicted_df = predicted_df.reset_index(drop=True)
+
+    # Calcula a diferença entre os valores (garantindo que a subtração não use índices desalinhados)
+    diff_values = predicted_df.values - output_df.values
+    diff = pd.DataFrame(diff_values, columns=output_df.columns)
+    
+    # Cálculo das estatísticas de erro
+    diff_abs = diff.abs()
+    
+    # Média de todas as diferenças absolutas em todas as colunas
+    diff_media = diff_abs.mean().mean() 
+    # Valor máximo absoluto em todo o DataFrame
+    diff_max = diff_abs.max().max()   
+    # Valor mínimo absoluto (maior que zero)
+    diff_min = diff_abs[diff_abs > 0].min().min() 
+    
+    print('\n -> Diferença entre o esperado e o obtido do treinamento com o set de validação:\n', diff)
+    
     return diff_media, diff_max, diff_min
 
 def save_model(model):
@@ -377,7 +415,7 @@ def main(dataframe):
     print("\n\t Treinamento em execução !")
     model, train_loss, validation_loss = train(dataframe)
     stop_counting = 0
-    predicted, accuracy = predict(model, dataframe)
+    predicted_tensor, accuracy = predict(model, dataframe)
     train_loss = pd.DataFrame(train_loss)
     validation_loss = pd.DataFrame(validation_loss)
 
@@ -392,17 +430,15 @@ def main(dataframe):
         
     #   Guardar os metadados do treinamento
     if EXPORT_DATA == True:
-        export_data(dataframe, predicted, train_loss, validation_loss, accuracy, dir_base)
+        export_data(dataframe, predicted_tensor, train_loss, validation_loss, accuracy, dir_base)
         
     #   Gerar os gráficos para visualização e controle do treinamento
     if GRAPHS == True:
-        show_graphs(dataframe, predicted, train_loss, validation_loss)
+        # Para show_graphs, convertemos o tensor para DF *antes*
+        predicted_df_for_graphs = pd.DataFrame(predicted_tensor.squeeze().cpu().numpy(), columns = ['eixo_x','eixo_y','eixo_z'])
+        show_graphs(dataframe, predicted_df_for_graphs, train_loss, validation_loss)
     print("\n\t Treinamento concluído !")
     
 
 # Rodar a main
 main(df_train)
-
-
-
-
