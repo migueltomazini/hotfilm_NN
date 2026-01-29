@@ -69,7 +69,7 @@ if needs_config:
 
 
 # Reading velocity data (time series)
-data_predicted = pd.read_csv(f'./data/run/run_results/velocity_{SERIE}/velocity_{SERIE}.csv', sep=',')
+data_predicted = pd.read_csv(f'./data/run/results/velocity_{SERIE}/velocity_{SERIE}.csv', sep=',')
 data_sonic = pd.read_csv(f'./data/train/train_df_{SERIE}.csv', sep=',')
 
 # Definition of the exponent and the reference line (-5/3) for the log-log plot
@@ -240,8 +240,8 @@ def process_data(fig_num: int, data_predicted: np.ndarray, data_sonic: np.ndarra
     """
 
     # Creation of the folder where the graphs will be saved
-    if not os.path.exists(f"data/run/run_results/velocity_{SERIE}/graphics/"):
-        os.mkdir(f"data/run/run_results/velocity_{SERIE}/graphics/")
+    if not os.path.exists(f"data/run/results/velocity_{SERIE}/graphics/"):
+        os.mkdir(f"data/run/results/velocity_{SERIE}/graphics/")
 
     plt.figure(fig_num)
 
@@ -310,7 +310,7 @@ def process_data(fig_num: int, data_predicted: np.ndarray, data_sonic: np.ndarra
 
     plt.title(f"Periodogram of {u_component} time series (Predicted and Sonic)")
     plt.legend(loc='lower left')
-    plt.savefig(f"data/run/run_results/velocity_{SERIE}/graphics/Periodogram_{u_component}.png", format='png', bbox_inches='tight')
+    plt.savefig(f"data/run/results/velocity_{SERIE}/graphics/Periodogram_{u_component}.png", format='png', bbox_inches='tight')
 
 # --- Perfect Velocity Check Function ---
 
@@ -321,7 +321,7 @@ def check_perfect_velocity_dissipation():
     """
     print("\n--- PERFECT VELOCITY DISSIPATION CHECK ---")
     
-    PERFECT_VEL_PATH = f"data/raw_data/raw_train/collected_data_{SERIE}/hotfilm-fake-vel-{SERIE}.csv"
+    PERFECT_VEL_PATH = f"data/train/raw/collected_data_{SERIE}/hotfilm-fake-vel-{SERIE}.csv"
     
     try:
         # Loads the data without using the first row as a header

@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import threading
+import json
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -13,121 +15,79 @@ matplotlib.use('TkAgg')  # Use a backend that supports GUI (e.g., TkAgg)
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
+import joblib
+import optuna  # For automatic hyperparameter tuning
 
-
+# Suppress system/driver warnings
+warnings.filterwarnings("ignore")
 
 info_output = '''
-
-Confira o manual dentro da pasta a seguir para colocar os dados corretos para treinamento:
+Check the manual inside the following folder to place the correct data for training:
     manuals/manual.txt
 
+Usage: python3 train_mlp.py <SERIE1> <SERIE2> ...
 '''
+
 ''' 
     @author Lucas Duarte    
     *
-    *
-    *
-    *
+    * Universal MLP Training with Optuna Optimization
+    * Includes Reynolds Number as 4th input feature
 '''
 __author__ = "Lucas Sales Duarte"
 __email__ = "lucassalesduarte026@gmail.com"
-__status__ = "finished"
+__status__ = "Production"
 
-# Hiper parâmetros
+# --- Global Configurations ---
+input_size = 4          # [voltage_x, voltage_y, voltage_z, reynolds]
+output_size = 3         # [velocity_x, velocity_y, velocity_z]
 
-EPOCHS = 256    #2000
-input_size = 3          # define o formato de entrada dos dados, no caso, 3 entradas para 3 saída (x,y,z)
-output_size = 3
-
-hidden_layers = 2       
-
-hidden_size = 16        
-
-
+# Default Hyperparameters (Will be overwritten by Optuna)
+EPOCHS = 256
 learning_rate = 0.001
-batch_size = 16
-VERSION = 11.0       # controle de versionamento
+batch_size = 32
+hidden_layers = 2
+hidden_size = 16
 
-# MODOS
-EXPORT_DATA = True    # Exporta arquivos .csv para analizar o resultado da rede
-GRAPHS = True         # Mostrar os gráficos
-SAVE = True           # Salvar o modelo
-GPU = 0               # 0 para uso da CPU                   | 1 para uso da GPU 
+# MODES
+EXPORT_DATA = True    
+GRAPHS = True         
+SAVE = True           
+GPU = 0               
+LOCAL = 1             
 
-LOCAL = 1             # 0 para no cluster                   | 1 para TREINO no notebook
-
-
-#   Definições Globais
-    
 START_TIME = time.time()
 input_df_name = "voltage"
 output_df_name = "velocity"
 model_local = './models'
 caminho_local = '.'
 caminho_cluster = '/home/lucasdu/algoritmo/2_cluster_architecture'
-dir_base = ''
-if LOCAL == 1:
-    dir_base = caminho_local
-elif LOCAL == 0:
-    dir_base = caminho_cluster
-    GRAPHS = False
-    
-    
-    
-# Seleção do dispositivo de processamento
-device = torch.device("cuda" if torch.cuda.is_available() and GPU else "cpu")
-print(f"Device de processamento: {device}\n")
-    
-if (len(sys.argv) < 2 or sys.argv[1]== '?'):
+dir_base = caminho_local if LOCAL == 1 else caminho_cluster
+
+if len(sys.argv) < 2 or sys.argv[1] == '?':
     print(info_output)
     sys.exit()
-    
 
-SERIE = sys.argv[1]            # Nome do treino em si - serie
+# Handle multiple series for Universal Model
+SERIES_LIST = sys.argv[1:]
+SERIE_IDENTIFIER = "_".join(SERIES_LIST)
 
-# ______________________________________________-_- TREINO -_-______________________________________________________
+device = torch.device("cuda" if torch.cuda.is_available() and GPU else "cpu")
+print(f"Processing Device: {device}\n")
 
-
-# Carregar a rede 
-df_train = pd.read_csv(f'{dir_base}/data/train/train_df_{SERIE}.csv', sep=",")
-
-# Cabeçalho 
-print(f' -- -- Tipos dos dados do df -- --  \n----------------------------\n{df_train.dtypes}\n----------------------------')
-local_data = (f'{dir_base}/data/train/train_df_{SERIE}.csv')              #   Local dos dados de entrada tensão
-local_destino = (f"{dir_base}/data/train/train_results/results_{SERIE}")                             #   Local de saida desejado para os resultados da rede
-print("\n\n -- -- -- -- - -- -- -- ")
-print("Nome de série:\t",SERIE)
-print("\n\n Rede processando dados")
-print(f"\n\t - Modelo será salvo em: \t\t{model_local}/model_mlp_{SERIE}.pth\n\t - Usará os dados de:\t\t\t{local_data}\n\t - Metadados serão salvos no destino em:\t{local_destino} ")
-print("\n\n -- -- -- -- - -- -- -- ")
-sys.stdout.flush()
-
-#   Definindo a Thread de contagem de tempo
+# --- Time counting thread ---
 stop_counting = 1
 def processing(start_time):
-        
     global stop_counting
-    for i in range(86400): # um dia de tempo 24 horas
-        if stop_counting == 0:
-            break 
-        current_time = time.time()- start_time
-        if i %2==0:
-            print(f'\r |{current_time:4.0f}|.',end='')
-        else:
-            print(f'\r.|{current_time:4.0f}| ',end='')
+    for i in range(86400):
+        if stop_counting == 0: break 
+        current_time = time.time() - start_time
+        print(f'\r |{current_time:4.0f}|.' if i % 2 == 0 else f'\r.|{current_time:4.0f}| ', end='')
         time.sleep(.5)
-        
-    
 
-'''
-    Definição da classe que controla os parâmetros da arquitetura da rede
-        - Número de camadas e neurônios de cada rede
-        - formato de entrada e saída da rede
-        - definição das funções de ativação
-'''
-# Definindo a classe NN que contém o modelo
+# --- Neural Network Architecture ---
 class MLP(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim=hidden_size, num_hidden_layers=hidden_layers):
+    def __init__(self, input_dim, output_dim, hidden_dim, num_hidden_layers):
         super(MLP, self).__init__()
         self.input_layer = nn.Linear(input_dim, hidden_dim)
         self.hidden_layers = nn.ModuleList()
@@ -136,80 +96,52 @@ class MLP(nn.Module):
         self.output_layer = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
+        # Ensure input is [batch, features]
+        if x.dim() == 3: x = x.squeeze(1)
         x = torch.relu(self.input_layer(x))
         for layer in self.hidden_layers:
             x = torch.relu(layer(x))
         x = self.output_layer(x)
         return x
 
-# Preparador dos doados para o formato necessário
+# --- Custom Dataset ---
 class VoltageVelocityDataset(Dataset):
-    def __init__(self, data):
-        self.X = (torch.tensor(
-            data[[f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z']].values).float().unsqueeze(1)).to(device)
-        self.Y = (torch.tensor(
-            data[[f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']].values).float().unsqueeze(1)).to(device)
+    def __init__(self, X_data, Y_data):
+        self.X = torch.tensor(X_data).float().to(device)
+        self.Y = torch.tensor(Y_data).float().to(device)
         
-    def __len__(self):
-        return len(self.X)
+    def __len__(self): return len(self.X)
+    def __getitem__(self, idx): return self.X[idx], self.Y[idx]
 
-    def __getitem__(self, idx):
-        return self.X[idx], self.Y[idx]
+# --- Evaluation and Export Functions ---
+def trained_info(data, predicted_df):
+    output_df = data.reset_index(drop=True)
+    diff = predicted_df.values - output_df.values
+    diff_abs = np.abs(diff)
+    return diff_abs.mean(), diff_abs.max(), (diff_abs[diff_abs > 0].min() if np.any(diff_abs > 0) else 0)
 
-# Função que exporta os metadados do treinamento
-def export_data(df, predictions, see_train_loss, see_val_loss, accuracy, dir_base_local):
+def export_data(df, predictions, train_loss, val_loss, accuracy, dir_base_local):
+    pred_np = predictions.cpu().detach().numpy()
+    if pred_np.ndim == 3: pred_np = pred_np.squeeze(1)
+    predictions_df = pd.DataFrame(pred_np, columns=['predicted_x', 'predicted_y', 'predicted_z'])
     
-    # CRIAÇÃO DO DATAFRAME DE PREDIÇÕES (Corrigido para usar colunas corretas)
-    predictions_df = pd.DataFrame(predictions.squeeze().cpu().numpy(), columns=[f'predicted_x',f'predicted_y',f'predicted_z'])
-    
-    see_train_loss = pd.DataFrame(see_train_loss)
-    see_val_loss = pd.DataFrame(see_val_loss)
-    measure_df = df[['velocity_x', 'velocity_y', 'velocity_z']]
-    df_exp = df[['time',f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z',f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']]
-    
-    # JUNÇÃO: Adiciona as colunas de previsão (o índice é resetado no trained_info, não aqui)
-    df_exp = df_exp.join(predictions_df)
-
-    caminho_completo = os.path.join(dir_base_local, f'data/train/train_results/results_{SERIE}')
-    if not os.path.exists(caminho_completo):
-        os.makedirs(caminho_completo)
+    df_exp = pd.concat([df.reset_index(drop=True), predictions_df], axis=1)
+    dest_path = os.path.join(dir_base_local, f'data/train/results/results_{SERIE_IDENTIFIER}')
+    if not os.path.exists(dest_path): os.makedirs(dest_path)
         
-    print('\nArquivo final:\n',df_exp)
-    df_exp.to_csv(f'{caminho_completo}/results_predict_{SERIE}.csv', index=False)
-    see_train_loss.to_csv(f'{caminho_completo}/results_train_{SERIE}.csv', index=False)
-    see_val_loss.to_csv(f'{caminho_completo}/results_val_{SERIE}.csv', index=False)
+    df_exp.to_csv(f'{dest_path}/results_predict_{SERIE_IDENTIFIER}.csv', index=False, float_format='%.12f')
+    pd.DataFrame(train_loss).to_csv(f'{dest_path}/results_train_{SERIE_IDENTIFIER}.csv', index=False)
+    pd.DataFrame(val_loss).to_csv(f'{dest_path}/results_val_{SERIE_IDENTIFIER}.csv', index=False)
     
-    # Passa o DataFrame de previsão corretamente nomeado
-    diff_media, diff_max, diff_min = trained_info(measure_df, predictions_df)
+    m_err, max_err, min_err = trained_info(df[['velocity_x', 'velocity_y', 'velocity_z']], predictions_df)
     
-    print(
-        f'\nMédia da diferença:\t{diff_media:6.6f}\nMáxima diferença:\t{diff_max:6.6f}\nMínima diferença:\t{diff_min:6.6f}\n')
-    model_name_local = (f'{model_local}/model_mlp_{SERIE}.pth')
-    
-    # Calcular o tempo do fim do treino
-    formatted_time = time.strftime("%d/%m/%Y %H:%M", time.localtime(time.time()))
-    df_hyper = pd.DataFrame(
-        {
-            'Média': [diff_media],
-            'Máximo': [diff_max],
-            'Mínimo': [diff_min],
-            'Accuracy (RMSE)': [accuracy],
-            'Epochs': [EPOCHS],
-            'hidden_layers': [hidden_layers],
-            'hidden_size': [hidden_size], 
-            'learning_rate': [learning_rate],
-            'batch_size': [batch_size],
-            'model_name_local': [model_name_local],
-            'train_time(s)': [time.time()-START_TIME],
-            'data_treinamento': [formatted_time],
-            
-        })
-    for column in df_hyper.columns:
-        print(f"{column}: {df_hyper[column].values[0]}")
-        
-    df_hyper.to_csv(
-        f'{caminho_completo}/hyperparameters_{SERIE}.csv', index=False)
-
+    df_hyper = pd.DataFrame({
+        'Mean_Diff': [m_err], 'Max_Diff': [max_err], 'Min_Diff': [min_err],
+        'RMSE': [accuracy], 'Epochs': [EPOCHS], 'Layers': [hidden_layers],
+        'Size': [hidden_size], 'LR': [learning_rate], 'Batch': [batch_size],
+        'Time_s': [time.time()-START_TIME], 'Date': [time.strftime("%d/%m/%Y %H:%M")]
+    })
+    df_hyper.to_csv(f'{dest_path}/hyperparameters_{SERIE_IDENTIFIER}.csv', index=False)
 
 def show_graphs(data, predictions, see_train_loss, see_val_loss):
     # Showing data
@@ -281,164 +213,122 @@ def show_graphs(data, predictions, see_train_loss, see_val_loss):
     # Mostrar os gráficos
     plt.show()
 
-#   Função de treinamento do modelo com o conjunto data 
-def train(data):
-    # Dividir os dados em dois segmentos: treino e validação numa relação de 80% para 20%
-    train_data = data.sample(frac=0.9, random_state=42)
-    val_data = data.drop(train_data.index)
+# --- Optuna Objective Function ---
+def objective(trial, X_train, Y_train, X_val, Y_val):
+    # Suggesting parameters for the trial
+    n_layers = trial.suggest_int('hidden_layers', 1, 4)
+    n_size = trial.suggest_int('hidden_size', 16, 128)
+    lr = trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True)
+    b_size = trial.suggest_categorical('batch_size', [16, 32, 64])
 
-    # Criar de fato os datasets e os dataloaders para treinamento e validação com uso das classes
-    train_dataset = VoltageVelocityDataset(train_data)
-    val_dataset = VoltageVelocityDataset(val_data)
-    train_loader = DataLoader(train_dataset, batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size)
+    train_loader = DataLoader(VoltageVelocityDataset(X_train, Y_train), batch_size=b_size, shuffle=True)
+    val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val), batch_size=b_size)
 
-    # Define a rede MLP e a função de perda (loss function) como error mean squared
-    mlp = MLP(input_dim=input_size, output_dim=output_size, hidden_dim=hidden_size,num_hidden_layers=hidden_layers)
+    model = MLP(input_size, output_size, n_size, n_layers).to(device)
     criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    # Definindo o uso de CPU ou GPU para processamento da rede
-    mlp = mlp.to(device)
+    # Fast training for trial evaluation
+    for epoch in range(50): 
+        model.train()
+        for X, Y in train_loader:
+            optimizer.zero_grad()
+            loss = criterion(model(X), Y)
+            loss.backward(); optimizer.step()
 
-    # Define o tipo de ativação e o learning rate
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for X, Y in val_loader: val_loss += criterion(model(X), Y).item()
+    return val_loss / len(val_loader)
+
+# --- Final Training Function ---
+def train_final(X_train, Y_train, X_val, Y_val):
+    train_loader = DataLoader(VoltageVelocityDataset(X_train, Y_train), batch_size, shuffle=True)
+    val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val), batch_size)
+
+    mlp = MLP(input_size, output_size, hidden_size, hidden_layers).to(device)
+    criterion = nn.MSELoss()
     optimizer = optim.Adam(mlp.parameters(), lr=learning_rate)
 
-    # treino da rede MLP no data set todo
-    
-    # ________________-_- TREINO -_-________________
-
-    # definição dos dataframes que guardarão os dados da evolução dos erros ao longo do treino
-    see_train_loss = np.empty([1, 2]).astype(float)
-    see_val_loss = np.empty([1, 2]).astype(float)
-    idx_train = 0
-    idx_val = 0
+    t_history, v_history = [], []
+    idx_t, idx_v = 0, 0
 
     for epoch in range(EPOCHS):
-        train_loss = 0.0
+        mlp.train()
+        epoch_t_loss = 0
         for X, Y in train_loader:
-            
-            # Feedforward
-            X,Y = X.to(device),Y.to(device)
-            outputs = mlp(X)
-            loss = criterion(outputs, Y)
-
-            # Backpropagation e ativação dos neurônios
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            see_train_loss = np.append(
-                see_train_loss, [idx_train, loss.item()]).reshape(-1, 2)
-            train_loss += loss.item() * X.shape[0]
-            idx_train = idx_train+1
+            loss = criterion(mlp(X), Y)
+            loss.backward(); optimizer.step()
+            t_history.append([idx_t, loss.item()]); idx_t += 1
+            epoch_t_loss += loss.item() * X.shape[0]
             
-        # Cálculo, por rodada, do erro da validação
+        mlp.eval()
+        epoch_v_loss = 0
         with torch.no_grad():
-            val_loss = 0.0
             for X, Y in val_loader:
-                X,Y = X.to(device),Y.to(device)
-                outputs = mlp(X)
-                loss = criterion(outputs, Y)
-                see_val_loss = np.append(see_val_loss, [idx_val, loss.item()]).reshape(-1, 2)
-                val_loss += loss.item() * X.shape[0]
-                idx_val = idx_val+1
+                loss = criterion(mlp(X), Y)
+                v_history.append([idx_v, loss.item()]); idx_v += 1
+                epoch_v_loss += loss.item() * X.shape[0]
 
-
-        # Mostrar o progresso
         if epoch % 32 == 0:
-            print("| Epoch {:4} | train loss {:4.4f} | val loss {:4.4f} |".format(epoch, train_loss / len(train_dataset), val_loss / len(val_dataset)),flush=True)
-    print('\n\n idx_train | idx_val: ', idx_train,' | ', idx_val)
-    return mlp, see_train_loss, see_val_loss
+            print(f"| Epoch {epoch:4} | Train Loss {epoch_t_loss/len(X_train):.6f} | Val Loss {epoch_v_loss/len(X_val):.6f} |")
+    return mlp, np.array(t_history), np.array(v_history)
 
-
-# Avaliar uma saída dada uma entrada com o modelo treinado
-def predict(mlp, data):
-    with torch.no_grad():
-        X = torch.tensor(
-            data[[f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z']].values).float().unsqueeze(1).to(device)
-        Y = torch.tensor(
-            data[[f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']].values).float().unsqueeze(1).to(device)
-        predictions = mlp(X)    
-        accuracy = ((predictions - Y) ** 2).mean().sqrt().item()
-        print(f"\n-> Accuracy: {accuracy:.4f}")
-        return predictions, accuracy
-
-
-def trained_info(data, predicted_tensor):
-    # DataFrame da saída real (Ground Truth)
-    output_df = data[[f'{output_df_name}_x', f'{output_df_name}_y', f'{output_df_name}_z']].copy()
-    
-    # Converte a predição para um DataFrame, usando os nomes de coluna de velocidade
-    if torch.is_tensor(predicted_tensor):
-        predicted_np = predicted_tensor.cpu().detach().numpy().squeeze()
-        # Cria o DF de previsão com colunas nomeadas para garantir a subtração
-        predicted_df = pd.DataFrame(predicted_np, columns=output_df.columns) 
-    else:
-        # Caso predictions já seja um DataFrame (erro de chamada anterior)
-        predicted_df = predicted_tensor.copy()
-
-    # --- CORREÇÃO DE ALINHAMENTO ---
-    # Garante que ambos os DataFrames tenham índices sequenciais (0, 1, 2, ...) 
-    # para que a subtração linha a linha seja bem-sucedida, ignorando índices esparsos.
-    output_df = output_df.reset_index(drop=True)
-    predicted_df = predicted_df.reset_index(drop=True)
-
-    # Calcula a diferença entre os valores (garantindo que a subtração não use índices desalinhados)
-    diff_values = predicted_df.values - output_df.values
-    diff = pd.DataFrame(diff_values, columns=output_df.columns)
-    
-    # Cálculo das estatísticas de erro
-    diff_abs = diff.abs()
-    
-    # Média de todas as diferenças absolutas em todas as colunas
-    diff_media = diff_abs.mean().mean() 
-    # Valor máximo absoluto em todo o DataFrame
-    diff_max = diff_abs.max().max()   
-    # Valor mínimo absoluto (maior que zero)
-    diff_min = diff_abs[diff_abs > 0].min().min() 
-    
-    print('\n -> Diferença entre o esperado e o obtido do treinamento com o set de validação:\n', diff)
-    
-    return diff_media, diff_max, diff_min
-
-def save_model(model):
-    torch.save(model.state_dict(), f'{model_local}/model_mlp_{SERIE}.pth')
-
-
-def main(dataframe):
-    # Começar a thread de contagem de tempo
-    global stop_counting
+def main():
+    global stop_counting, hidden_layers, hidden_size, learning_rate, batch_size
     timeCounter_thread = threading.Thread(target=processing, args=(START_TIME,))
-    timeCounter_thread.daemon= True
-    timeCounter_thread.start()
+    timeCounter_thread.daemon= True; timeCounter_thread.start()
+
+    dfs = []
+    for s in SERIES_LIST:
+        df = pd.read_csv(f'{dir_base}/data/train/train_df_{s}.csv')
+        if 'reynolds' not in df.columns:
+            json_path = f'{dir_base}/data/config/config_{s}.json'
+            if os.path.exists(json_path):
+                with open(json_path, 'r') as f:
+                    cfg = json.load(f)
+                    df['reynolds'] = cfg.get('RE_NUMBER', cfg.get('RE_EXPECTED', 0.0))
+            else: df['reynolds'] = 0.0
+        dfs.append(df)
     
-    # Iniciar Treinamento
-    print("\n\t Treinamento em execução !")
-    model, train_loss, validation_loss = train(dataframe)
+    df_total = pd.concat(dfs, ignore_index=True)
+    X_raw = df_total[[f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z', 'reynolds']].values
+    Y_raw = df_total[['velocity_x', 'velocity_y', 'velocity_z']].values
+    
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_raw)
+    if not os.path.exists(model_local): os.makedirs(model_local)
+    joblib.dump(scaler, f'{model_local}/scaler_{SERIE_IDENTIFIER}.joblib')
+
+    indices = np.random.permutation(len(X_scaled))
+    split = int(0.9 * len(X_scaled))
+    X_train, X_val = X_scaled[indices[:split]], X_scaled[indices[split:]]
+    Y_train, Y_val = Y_raw[indices[:split]], Y_raw[indices[split:]]
+
+    print(f"\n[Optuna] Starting automatic optimization for series: {SERIES_LIST}")
+    study = optuna.create_study(direction='minimize')
+    study.optimize(lambda trial: objective(trial, X_train, Y_train, X_val, Y_val), n_trials=50)
+
+    print("\nBest parameters found:", study.best_params)
+    hidden_layers, hidden_size = study.best_params['hidden_layers'], study.best_params['hidden_size']
+    learning_rate, batch_size = study.best_params['learning_rate'], study.best_params['batch_size']
+
+    print("\nStarting final high-precision training...")
+    model, t_loss, v_loss = train_final(X_train, Y_train, X_val, Y_val)
     stop_counting = 0
-    predicted_tensor, accuracy = predict(model, dataframe)
-    train_loss = pd.DataFrame(train_loss)
-    validation_loss = pd.DataFrame(validation_loss)
-
-    train_loss = train_loss.rename(columns={train_loss.columns[0]: 'time'})
-    train_loss = train_loss.rename(columns={train_loss.columns[1]: 'error_train'})
-    validation_loss = validation_loss.rename(columns={validation_loss.columns[0]: 'time'})
-    validation_loss = validation_loss.rename(columns={validation_loss.columns[1]: 'error_val'})
-
-    #   Salvar o modelo
-    if SAVE == True:
-        save_model(model)
-        
-    #   Guardar os metadados do treinamento
-    if EXPORT_DATA == True:
-        export_data(dataframe, predicted_tensor, train_loss, validation_loss, accuracy, dir_base)
-        
-    #   Gerar os gráficos para visualização e controle do treinamento
-    if GRAPHS == True:
-        # Para show_graphs, convertemos o tensor para DF *antes*
-        predicted_df_for_graphs = pd.DataFrame(predicted_tensor.squeeze().cpu().numpy(), columns = ['eixo_x','eixo_y','eixo_z'])
-        show_graphs(dataframe, predicted_df_for_graphs, train_loss, validation_loss)
-    print("\n\t Treinamento concluído !")
     
+    with torch.no_grad():
+        all_X = torch.tensor(X_scaled).float().to(device)
+        all_Y = torch.tensor(Y_raw).float().to(device)
+        predictions = model(all_X)
+        accuracy = ((predictions - all_Y) ** 2).mean().sqrt().item()
 
-# Rodar a main
-main(df_train)
+    if SAVE: torch.save(model.state_dict(), f'{model_local}/model_mlp_{SERIE_IDENTIFIER}.pth')
+    if EXPORT_DATA: export_data(df_total, predictions, t_loss, v_loss, accuracy, dir_base)
+    if GRAPHS: show_graphs(df_total, predictions, t_loss, v_loss)
+    print(f"\n\t Training finished! Model: model_mlp_{SERIE_IDENTIFIER}.pth")
+
+if __name__ == "__main__":
+    main()
