@@ -1,19 +1,12 @@
-"""Physics-informed MLP training with spectral analysis.
+"""Physics-informed MLP training with spectral analysis and Fine-tuning support.
 
 This module trains Multi-Layer Perceptron models to predict wind velocity
-from hot-film voltage measurements. The training process is guided by physical
-constraints from Kolmogorov's theory:
-- Spectral slope target: -5/3 (K41 inertial range)
-- Isotropy ratio target: 4/3 (local isotropy in the inertial range)
-
-The training pipeline uses Optuna for hyperparameter optimization with a
-composite loss function balancing prediction accuracy with physical consistency.
+from hot-film voltage measurements. It supports both training from scratch (using Optuna)
+and fine-tuning an existing model to adapt to new King's Law constants and Reynolds numbers.
 
 Usage:
-    python3 train_mlp.py <series_id1> [<series_id2> ...]
-
-Example:
-    python3 train_mlp.py 5940 21180 9999
+    Normal Training: python3 train_mlp.py <series_id1>
+    Fine-tuning:     python3 train_mlp.py <new_series_id> <base_model_name.pth>
 """
 
 import os
@@ -21,6 +14,7 @@ import sys
 import time
 import json
 import warnings
+from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -33,28 +27,25 @@ from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
 from scipy.signal import periodogram
 from scipy.stats import linregress
+from scipy.integrate import trapz
 import joblib
 import optuna
 
-# Suppress only specific warnings, not all
+# Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*Optuna logging.*")
 
 info_output = '''
-Usage: python3 train_mlp.py <series_id1> [<series_id2> ...]
-
-Check the manual inside the following folder for data preparation details:
-    manuals/manual.txt
+Usage: 
+    Normal: python3 train_mlp.py <series_id1>
+    Fine-tuning: python3 train_mlp.py <new_series_id> <base_model_name.pth>
 '''
 
 # Global Definitions
-# Input size for the model
-input_size = 4  # (x,y,z + reynolds)
-# Output size for the model
-output_size = 3  # Maintained 3 outputs (velocity_x, velocity_y, velocity_z)
-# Number of training epochs
+input_size = 4  
+output_size = 3 
 EPOCHS = 256
-# Start time for training duration calculation
+EPOCHS_FINETUNE = 64 # Reduced epochs for fast adaptation
 START_TIME = time.time()
 # Column names in the input and output data
 input_df_name, output_df_name = "voltage", "velocity"
@@ -62,6 +53,7 @@ input_df_name, output_df_name = "voltage", "velocity"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_local = os.path.join(BASE_DIR, 'models')
 data_dir = os.path.join(BASE_DIR, 'data')
+dir_base = BASE_DIR
 
 # Device configuration - using GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -71,28 +63,16 @@ if len(sys.argv) < 2:
     print(info_output)
     sys.exit()
 
-# List of time series data files
-SERIES_LIST = sys.argv[1:]
-# Identifier for the series, used for file naming
-SERIE_IDENTIFIER = "_".join(SERIES_LIST)
+SERIES_LIST = [sys.argv[1]]
+BASE_MODEL_NAME = sys.argv[2] if len(sys.argv) > 2 else None
+SERIE_IDENTIFIER = SERIES_LIST[0]
 
 # ==============================================================================
-# PHYSICS HELPER FUNCTIONS (UNIVERSAL CONSTANTS)
+# PHYSICS HELPER FUNCTIONS
 # ==============================================================================
 
 def calculate_spectral_slope(velocity_signal, fs):
-    """Calculate PSD slope in the inertial subrange.
-
-    Computes the spectral slope from the longitudinal velocity component's power
-    spectral density. The target slope is -5/3 according to Kolmogorov's K41 theory.
-
-    Args:
-        velocity_signal: Velocity time series array (shape: [samples, 3]).
-        fs: Sampling frequency in Hz.
-
-    Returns:
-        float: Spectral slope in the range 5-50 Hz. Returns -1.0 if insufficient data.
-    """
+    """Calculate PSD slope in the inertial subrange (Target -5/3)."""
     if len(velocity_signal) < 512:
         return -1.0
 
@@ -104,22 +84,20 @@ def calculate_spectral_slope(velocity_signal, fs):
     if not np.any(mask):
         return -1.0
 
-    slope, _, _, _, _ = linregress(np.log10(f[mask]), np.log10(psd[mask]))
-    return slope
+    # Added small epsilon (1e-12) to avoid log10(0) which generates NaN
+    log_f = np.log10(f[mask] + 1e-12)
+    log_psd = np.log10(psd[mask] + 1e-12)
+    
+    slope, _, _, _, _ = linregress(log_f, log_psd)
+    
+    # Validation to prevent NaN propagation
+    if np.isnan(slope):
+        return -1.0
+        
+    return float(slope)
 
 def calculate_isotropy_ratio(velocity_signal, fs):
-    """Calculate transverse-to-longitudinal energy ratio.
-
-    Computes the isotropy metric (transverse/longitudinal energy) in the inertial
-    subrange. The target ratio is 4/3 for locally isotropic turbulence.
-
-    Args:
-        velocity_signal: Velocity time series array (shape: [samples, 3]).
-        fs: Sampling frequency in Hz.
-
-    Returns:
-        float: Isotropy ratio. Returns 1.0 if insufficient data.
-    """
+    """Calculate the ratio between transverse and longitudinal energy (Target: 4/3)."""
     if len(velocity_signal) < 512:
         return 1.0
 
@@ -127,13 +105,17 @@ def calculate_isotropy_ratio(velocity_signal, fs):
     f, psd_u = periodogram(velocity_signal[:, 0], fs=fs)
     _, psd_v = periodogram(velocity_signal[:, 1], fs=fs)
     _, psd_w = periodogram(velocity_signal[:, 2], fs=fs)
-
-    # Integrate energy in inertial range
+    
     mask = (f >= 5.0) & (f <= 50.0)
-    energy_u = np.trapz(psd_u[mask], f[mask])
-    energy_trans = np.trapz((psd_v[mask] + psd_w[mask]) / 2, f[mask])
-
-    return energy_trans / (energy_u + 1e-6)
+    if not np.any(mask):
+        return 1.0
+        
+    # Energy in the inertial range using trapezoidal integration
+    energy_u = trapz(psd_u[mask], f[mask])
+    energy_trans = trapz((psd_v[mask] + psd_w[mask])/2, f[mask])
+    
+    # Return ratio with safety epsilon to avoid division by zero
+    return float(energy_trans / (energy_u + 1e-10))
 
 # ==============================================================================
 # MODEL AND DATASET
@@ -174,19 +156,26 @@ class VoltageVelocityDataset(Dataset):
         return self.X[idx].to(self.device), self.Y[idx].to(self.device)
 
 # ==============================================================================
-# OPTUNA OBJECTIVE (UNIVERSAL PHYSICS)
+# METADATA LOADING (For Fine-tuning)
+# ==============================================================================
+
+def get_base_model_params(model_name):
+    """Retrieves hyperparameters of a previous model from its metadata file."""
+    model_id = model_name.replace("model_mlp_", "").replace(".pth", "")
+    meta_path = os.path.join(data_dir, 'train', 'results', f'results_{model_id}', f'hyperparameters_{model_id}.csv')
+    
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"Base model metadata not found at: {meta_path}")
+    
+    df = pd.read_csv(meta_path)
+    return int(df['Layers'].iloc[0]), int(df['Size'].iloc[0])
+
+# ==============================================================================
+# TRAINING UTILITIES
 # ==============================================================================
 
 def objective(trial, X_train, Y_train, X_val, Y_val, fs):
     """Optuna objective function for physics-informed hyperparameter optimization.
-
-    Trains a candidate model and evaluates it using a composite loss combining:
-    - Prediction accuracy (MSE) - 50% weight
-    - Spectral slope fidelity to -5/3 - 30% weight
-    - Isotropy ratio fidelity to 4/3 - 20% weight
-
-    This physics-informed approach ensures the model learns turbulence characteristics
-    beyond simple point-wise prediction accuracy.
     """
     n_layers = trial.suggest_int('hidden_layers', 1, 4)
     n_size = trial.suggest_int('hidden_size', 16, 128)
@@ -198,8 +187,7 @@ def objective(trial, X_train, Y_train, X_val, Y_val, fs):
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
-    # Quick training phase
-    for epoch in range(50):
+    for _ in range(50): # Fast trial
         model.train()
         for X, Y in train_loader:
             optimizer.zero_grad()
@@ -209,68 +197,103 @@ def objective(trial, X_train, Y_train, X_val, Y_val, fs):
     # Validation with physics metrics
     model.eval()
     with torch.no_grad():
-        X_v = torch.tensor(X_val).float().to(device)
-        Y_v = torch.tensor(Y_val).float().to(device)
-        predictions = model(X_v)
-        mse_error = criterion(predictions, Y_v).item()
+        preds = model(torch.tensor(X_val).float().to(device))
+        mse = criterion(preds, torch.tensor(Y_val).float().to(device)).item()
+        slope = calculate_spectral_slope(preds.cpu().numpy(), fs)
+        slope_err = abs(slope - (-5/3)) / (5/3)
 
-        pred_np = predictions.cpu().numpy()
+        # Added safety for NaN or infinite results during Optuna optimization
+        score = (0.7 * mse) + (0.3 * slope_err)
+        if np.isnan(score) or np.isinf(score):
+            return 100.0 # High penalty for non-converging trials
 
-        # Compute physics metrics
-        slope = calculate_spectral_slope(pred_np, fs)
-        slope_err = abs(slope - (-5 / 3)) / (5 / 3)
+    return score
 
-    # Composite loss: 70% accuracy, 30% slope
-    return (0.7 * mse_error) + (0.3 * slope_err)
+def show_graphs(data, predictions, train_loss_hist, val_loss_hist):
+    shown = predictions
+    if torch.is_tensor(shown):
+        # Convert tensor to numpy and handle potential extra dimensions
+        shown_np = shown.cpu().detach().numpy()
+        if shown_np.ndim == 3: shown_np = shown_np.squeeze(1)
+        shown = pd.DataFrame(shown_np, columns=['axis_x', 'axis_y', 'axis_z'])
+
+    graph_dir = os.path.join(data_dir, 'train', 'results', f"results_{SERIE_IDENTIFIER}", "graphics")
+    os.makedirs(graph_dir, exist_ok=True)
+    
+    # Plotting loop for components
+    axes = ['x', 'y', 'z']
+    for i, ax in enumerate(axes):
+        plt.figure(i)
+        plt.plot(data.time, data[f'velocity_{ax}'], color='r', label='Original')
+        plt.plot(data.time, shown.iloc[:, i], color='g', label='Predicted')
+        plt.title(f"Comparison Axis {ax.upper()}")
+        plt.legend()
+        plt.savefig(os.path.join(graph_dir, f"Velocity_Comparison_{ax}.png"))
+        plt.close()
+    
+    # Plotting Loss
+    plt.figure(3)
+    t_hist = pd.DataFrame(train_loss_hist)
+    v_hist = pd.DataFrame(val_loss_hist)
+    if not t_hist.empty:
+        plt.plot(t_hist.iloc[:,0], t_hist.iloc[:,1], label='Train')
+    if not v_hist.empty:
+        plt.plot(v_hist.iloc[:,0], v_hist.iloc[:,1], label='Val')
+    plt.title("Loss Evolution")
+    plt.legend()
+    plt.savefig(os.path.join(graph_dir, "Loss_Evolution.png"))
+    plt.close()
 
 # ==============================================================================
 # MAIN
 # ==============================================================================
 
 def main():
-    """Execute complete training pipeline with physics-informed optimization.
-
-    Workflow:
-        1. Load training data from multiple series
-        2. Combine datasets and extract physical sampling rates
-        3. Prepare features (voltage, reynolds) and targets (velocity)
-        4. Normalize inputs using StandardScaler
-        5. Split into train/validation sets (90/10)
-        6. Optimize hyperparameters with Optuna using physics-informed objectives
-        7. Train final model with best hyperparameters
-        8. Evaluate physical metrics (slope, isotropy) on full dataset
-        9. Export model weights, scaler, and hyperparameter metadata
-    """
-    # Load all series data and their configurations
-    dfs = []
-    configs = []
+    dfs, configs = [], []
     for s in SERIES_LIST:
-        csv_path = os.path.join(data_dir, 'train', f'train_df_{s}.csv')
-        config_path = os.path.join(data_dir, 'config', f'config_{s}.json')
-        
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"Training data not found: {csv_path}")
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        
-        df = pd.read_csv(csv_path)
-        with open(config_path, 'r') as f:
+        df_path = os.path.join(data_dir, 'train', f'train_df_{s}.csv')
+        if not os.path.exists(df_path):
+            raise FileNotFoundError(f"Training data not found: {df_path}")
+        df = pd.read_csv(df_path)
+        with open(os.path.join(data_dir, 'config', f'config_{s}.json'), 'r') as f:
             configs.append(json.load(f))
         dfs.append(df)
 
     # Combine datasets for training
     df_total = pd.concat(dfs, ignore_index=True)
+    
+    # Added Data Cleaning: Remove potential NaNs or Infs that contaminate the network
+    df_total = df_total.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+    
     fs = configs[0]['FS_HOTFILM']
 
     # Extract features and targets
     X_raw = df_total[[f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z', 'reynolds']].values
     Y_raw = df_total[['velocity_x', 'velocity_y', 'velocity_z']].values
 
-    # Normalize features and save scaler for later inference
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_raw)
-    os.makedirs(model_local, exist_ok=True)
+    # Persist or Fit Scaler based on training mode
     scaler_path = os.path.join(model_local, f'scaler_{SERIE_IDENTIFIER}.joblib')
+    
+    if BASE_MODEL_NAME:
+        # Fine-tuning mode: Loading original base scaler to maintain feature distribution
+        base_id = BASE_MODEL_NAME.replace("model_mlp_", "").replace(".pth", "")
+        base_scaler_path = os.path.join(model_local, f'scaler_{base_id}.joblib')
+        
+        if os.path.exists(base_scaler_path):
+            print(f"[Fine-tuning] Loading base model scaler: {base_scaler_path}")
+            scaler = joblib.load(base_scaler_path)
+            # Use transform to preserve the mean/std the model weights were trained with
+            X_scaled = scaler.transform(X_raw) 
+        else:
+            print("[Warning] Base scaler not found! Falling back to fit_transform.")
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_raw)
+    else:
+        # Standard mode: Create and fit new scaler
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_raw)
+        
+    os.makedirs(model_local, exist_ok=True)
     joblib.dump(scaler, scaler_path)
 
     # Train/validation split
@@ -278,59 +301,94 @@ def main():
     X_train, X_val = X_scaled[:split], X_scaled[split:]
     Y_train, Y_val = Y_raw[:split], Y_raw[split:]
 
-    # Hyperparameter optimization with physics guidance
-    print(f"\n[Optuna] Starting physics-informed optimization...")
-    study = optuna.create_study(direction='minimize')
-    # Suppress Optuna logging
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    study.optimize(lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs), n_trials=30, show_progress_bar=True)
+    # --- MODE SELECTION ---
+    if BASE_MODEL_NAME:
+        print(f"\n[Fine-tuning] Loading base model weights: {BASE_MODEL_NAME}")
+        h_layers, h_size = get_base_model_params(BASE_MODEL_NAME)
+        best_p = {
+            'hidden_layers': h_layers, 
+            'hidden_size': h_size, 
+            'learning_rate': 0.0005, # Slow adaptation learning rate
+            'batch_size': 32
+        }
+        model = MLP(input_size, output_size, h_size, h_layers).to(device)
+        model.load_state_dict(torch.load(os.path.join(model_local, BASE_MODEL_NAME), map_location=device))
+        current_epochs = EPOCHS_FINETUNE
+    else:
+        print(f"\n[Optuna] Starting optimization from scratch...")
 
-    best_p = study.best_params
-    # Final training with best parameters
-    model = MLP(input_size, output_size, best_p['hidden_size'], best_p['hidden_layers']).to(device)
+        # Path to store per-series best parameters
+        best_params_dir = os.path.join(data_dir, 'train', 'best_params')
+        os.makedirs(best_params_dir, exist_ok=True)
+        best_params_path = os.path.join(best_params_dir, f'best_params_{SERIE_IDENTIFIER}.json')
+
+        if os.path.exists(best_params_path):
+            with open(best_params_path, 'r') as fh:
+                best_p = json.load(fh)
+            print(f"[Optuna] Reusing saved parameters for {SERIE_IDENTIFIER}")
+        else:
+            study = optuna.create_study(direction='minimize')
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
+            study.optimize(lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs), n_trials=30)
+            best_p = study.best_params
+            with open(best_params_path, 'w') as fh:
+                json.dump(best_p, fh, indent=2)
+
+        model = MLP(input_size, output_size, best_p['hidden_size'], best_p['hidden_layers']).to(device)
+        current_epochs = EPOCHS
+
+    # --- FINAL TRAINING LOOP ---
     optimizer = optim.Adam(model.parameters(), lr=best_p['learning_rate'])
     criterion = nn.MSELoss()
     train_loader = DataLoader(VoltageVelocityDataset(X_train, Y_train, device), batch_size=best_p['batch_size'], shuffle=True)
+    val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val, device), batch_size=best_p['batch_size'])
 
-    print(f"\n[Training] Final run with best hyperparameters: {best_p}")
-    for epoch in range(EPOCHS):
+    train_loss_hist, val_loss_hist = [], []
+    idx_t, idx_v = 0, 0
+    
+    print(f"[Training] Final run for {current_epochs} epochs...")
+    for epoch in range(current_epochs):
         model.train()
         for X, Y in train_loader:
             optimizer.zero_grad()
-            criterion(model(X), Y).backward()
+            l = criterion(model(X), Y)
+            l.backward()
             optimizer.step()
+            train_loss_hist.append([idx_t, l.item()]); idx_t += 1
+            
+        model.eval()
+        with torch.no_grad():
+            for X, Y in val_loader:
+                l_v = criterion(model(X), Y)
+                val_loss_hist.append([idx_v, l_v.item()]); idx_v += 1
 
-    # Evaluate model on full dataset
+    # --- EVALUATION ---
     model.eval()
     with torch.no_grad():
-        all_X = torch.tensor(X_scaled).float().to(device)
-        predictions = model(all_X)
+        all_X_tensor = torch.tensor(X_scaled).float().to(device)
+        predictions = model(all_X_tensor)
+        
+        # Predicted data extraction for physical validation
         pred_np = predictions.cpu().numpy()
-
         final_slope = calculate_spectral_slope(pred_np, fs)
         final_iso = calculate_isotropy_ratio(pred_np, fs)
-        rmse = ((predictions - torch.tensor(Y_raw).float().to(device)) ** 2).mean().sqrt().item()
+        
+        # RMSE calculation with safety mask against potential NaNs
+        target_tensor = torch.tensor(Y_raw).float().to(device)
+        rmse = ((predictions - target_tensor)**2).mean().sqrt().item()
 
-    # Save model, scaler, and metadata
+    # --- SAVE AND EXPORT ---
     dest = os.path.join(data_dir, 'train', 'results', f'results_{SERIE_IDENTIFIER}')
     os.makedirs(dest, exist_ok=True)
-    model_path = os.path.join(model_local, f'model_mlp_{SERIE_IDENTIFIER}.pth')
-    torch.save(model.state_dict(), model_path)
+    torch.save(model.state_dict(), os.path.join(model_local, f'model_mlp_{SERIE_IDENTIFIER}.pth'))
 
-    # Export metrics for reference during inference
-    hyperparams_df = pd.DataFrame({
-        'Layers': [best_p['hidden_layers']],
-        'Size': [best_p['hidden_size']],
-        'RMSE': [rmse],
-        'Final_Slope': [final_slope],
-        'Final_Isotropy': [final_iso]
-    })
-    hyperparams_path = os.path.join(dest, f'hyperparameters_{SERIE_IDENTIFIER}.csv')
-    hyperparams_df.to_csv(hyperparams_path, index=False)
+    pd.DataFrame({
+        'Layers': [best_p['hidden_layers']], 'Size': [best_p['hidden_size']],
+        'RMSE': [rmse], 'Final_Slope': [final_slope], 'Final_Isotropy': [final_iso]
+    }).to_csv(os.path.join(dest, f'hyperparameters_{SERIE_IDENTIFIER}.csv'), index=False)
 
-    print(f"\nTraining complete. Physics-informed metrics:")
-    print(f"  RMSE: {rmse:.6f}")
-    print(f"  Spectral Slope: {final_slope:.4f} (target: -1.667)")
-    print(f"  Isotropy Ratio: {final_iso:.4f} (target: 1.333)")
+    print(f"\n[Done] Training complete. Metrics: RMSE={rmse:.6f}, Slope={final_slope:.4f}, Isotropy={final_iso:.4f}")
+    show_graphs(df_total, predictions, train_loss_hist, val_loss_hist)
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

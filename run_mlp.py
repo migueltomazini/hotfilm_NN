@@ -41,10 +41,6 @@ Check the manual inside the following folder for data preparation details:
 input_size = 4          # Maintained 4 inputs (x,y,z + reynolds)
 output_size = 3
 
-# Will be overwritten automatically by metadata loading
-hidden_layers = 1
-hidden_size = 114
-
 START_TIME = time.time()
 train_data_df=''
 input_df_name = "voltage"
@@ -58,18 +54,17 @@ if (len(sys.argv) < 2 or sys.argv[1]== '?'):
     print(info_output)
     sys.exit()
 
-# Select processing device
-device = "cpu"
+# Select processing device (use GPU if available)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Processing device: {device}\n")
     
-# ______________________________________________-_- RODAR -_-______________________________________________________
+# ______________________________________________-_- RUN -_-______________________________________________________
 
 SERIE = sys.argv[1]                                     
 local_modelo = (f"{model_local}/{sys.argv[2]}")                   
 local_data = (f"{dir_base}/data/run/run_{SERIE}.csv")              
 local_destino = (f"{dir_base}/data/run/results/velocity_{SERIE}")                             
 
-# Identifica o ID do modelo para buscar metadados e scaler
 MODEL_ID = sys.argv[2].replace("model_mlp_", "").replace(".pth", "")
 
 print("\n\n -- -- -- -- - -- -- -- ")
@@ -168,17 +163,41 @@ def validate_synthetic_results(serie, df_predicted):
     """Compare predictions against synthetic ground truth if available.
 
     Loads reference velocity data and calculates RMSE for each velocity component.
-    Handles length mismatches by truncating longer arrays.
+    Automatically detects if first row is header or data to handle format variations.
     """
     ref_path = f"./data/run/raw/collected_data_{serie}/hotfilm_vel_{serie}.csv"
     
     if os.path.exists(ref_path):
         print(f"\n[Validation] Synthetic ground truth found: {ref_path}")
         try:
-            # Reference file columns: time, vel_x, vel_y, vel_z
-            df_ref = pd.read_csv(ref_path, sep=',', names=['time', 'velocity_x', 'velocity_y', 'velocity_z'])
+            # Auto-detect if first row needs to be skipped
+            skip_rows = 0
+            with open(ref_path, 'r') as f:
+                first_line = f.readline().strip()
+                try:
+                    # Try parsing first value as float
+                    float(first_line.split(',')[0])
+                except (ValueError, IndexError):
+                    # First line is not numeric - skip it
+                    skip_rows = 1
+            
+            # Read only as many rows as needed (large file optimization)
+            n_predictions = len(df_predicted)
+            df_ref = pd.read_csv(ref_path, sep=',', names=['time', 'velocity_x', 'velocity_y', 'velocity_z'], 
+                                 skiprows=skip_rows, nrows=n_predictions, low_memory=False)
+            
+            # Convert to numeric, coercing errors
+            for col in ['time', 'velocity_x', 'velocity_y', 'velocity_z']:
+                df_ref[col] = pd.to_numeric(df_ref[col], errors='coerce')
+            
+            # Remove rows with NaN
+            df_ref = df_ref.dropna()
         except Exception as e:
             print(f"-> Warning: Could not parse reference file: {e}")
+            return
+        
+        if len(df_ref) == 0:
+            print("-> Warning: No valid numeric data found in reference file.")
             return
         
         pred_x = df_predicted[f'{output_df_name}_predicted_x'].values
@@ -242,12 +261,14 @@ def runModel():
     """
     # Reconstruct network architecture based on metadata
     h_layers, h_size = get_model_metadata(MODEL_ID)
-    model = MLP(input_dim=4, output_dim=3, hidden_dim=h_size, num_hidden_layers=h_layers)
+    model = MLP(input_dim=4, output_dim=3, hidden_dim=h_size, num_hidden_layers=h_layers).to(device)
     model.load_state_dict(torch.load(local_modelo, map_location=device))
     model.eval()
 
     # Load input data and apply feature scaling
     data_in = pd.read_csv(local_data)
+    data_in = data_in.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+
     scaler_path = os.path.join(model_local, f'scaler_{MODEL_ID}.joblib')
     scaler = joblib.load(scaler_path)
 
@@ -265,11 +286,16 @@ def runModel():
     results_df = pd.DataFrame(pred_np, columns=[f'{output_df_name}_predicted_x', f'{output_df_name}_predicted_y', f'{output_df_name}_predicted_z'])
     df_final = pd.concat([data_in, results_df], axis=1)
 
-    # Save results to disk
+    # Save results to disk (optimized for large datasets)
     if not os.path.exists(local_destino):
         os.makedirs(local_destino)
     output_file = os.path.join(local_destino, f'velocity_{SERIE}.csv')
-    df_final.to_csv(output_file, index=False, float_format='%.12f')
+    
+    # For large files, use faster CSV writer without float formatting
+    if len(df_final) > 1000000:
+        df_final.to_csv(output_file, index=False)
+    else:
+        df_final.to_csv(output_file, index=False, float_format='%.12f')
 
     print(f"\nExecution finished. Results saved at: {output_file}")
 

@@ -317,11 +317,11 @@ def process_data(fig_num: int, data_predicted: np.ndarray, data_sonic: np.ndarra
 def check_perfect_velocity_dissipation():
     """
     Calculates the dissipation (ε) from the perfect velocity data file 
-    (hotfilm-fake-vel-{SERIE}.csv) and compares it to the expected value.
+    (hotfilm_vel_{SERIE}.csv) and compares it to the expected value.
     """
     print("\n--- PERFECT VELOCITY DISSIPATION CHECK ---")
     
-    PERFECT_VEL_PATH = f"data/train/raw/collected_data_{SERIE}/hotfilm-fake-vel-{SERIE}.csv"
+    PERFECT_VEL_PATH = f"data/train/raw/collected_data_{SERIE}/hotfilm_vel_{SERIE}.csv"
     
     try:
         # Loads the data without using the first row as a header
