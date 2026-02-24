@@ -45,10 +45,12 @@ Usage:
 input_size = 4  
 output_size = 3 
 EPOCHS = 256
-EPOCHS_FINETUNE = 64 # Reduced epochs for fast adaptation
+EPOCHS_FINETUNE = 128
 START_TIME = time.time()
+
 # Column names in the input and output data
 input_df_name, output_df_name = "voltage", "velocity"
+
 # Model and directory configurations
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model_local = os.path.join(BASE_DIR, 'models')
@@ -84,16 +86,13 @@ def calculate_spectral_slope(velocity_signal, fs):
     if not np.any(mask):
         return -1.0
 
-    # Added small epsilon (1e-12) to avoid log10(0) which generates NaN
+    # Protection against log10(0) that generates NaNs
     log_f = np.log10(f[mask] + 1e-12)
     log_psd = np.log10(psd[mask] + 1e-12)
     
     slope, _, _, _, _ = linregress(log_f, log_psd)
     
-    # Validation to prevent NaN propagation
-    if np.isnan(slope):
-        return -1.0
-        
+    if np.isnan(slope): return -1.0
     return float(slope)
 
 def calculate_isotropy_ratio(velocity_signal, fs):
@@ -114,8 +113,8 @@ def calculate_isotropy_ratio(velocity_signal, fs):
     energy_u = trapz(psd_u[mask], f[mask])
     energy_trans = trapz((psd_v[mask] + psd_w[mask])/2, f[mask])
     
-    # Return ratio with safety epsilon to avoid division by zero
-    return float(energy_trans / (energy_u + 1e-10))
+    # Protection against division by zero
+    return float(energy_trans / (energy_u + 1e-12))
 
 # ==============================================================================
 # MODEL AND DATASET
@@ -205,7 +204,7 @@ def objective(trial, X_train, Y_train, X_val, Y_val, fs):
         # Added safety for NaN or infinite results during Optuna optimization
         score = (0.7 * mse) + (0.3 * slope_err)
         if np.isnan(score) or np.isinf(score):
-            return 100.0 # High penalty for non-converging trials
+            return 999.0 # High penalty for non-converging trials
 
     return score
 
@@ -220,7 +219,7 @@ def show_graphs(data, predictions, train_loss_hist, val_loss_hist):
     graph_dir = os.path.join(data_dir, 'train', 'results', f"results_{SERIE_IDENTIFIER}", "graphics")
     os.makedirs(graph_dir, exist_ok=True)
     
-    # Plotting loop for components
+    # Plotting for components
     axes = ['x', 'y', 'z']
     for i, ax in enumerate(axes):
         plt.figure(i)
@@ -238,7 +237,7 @@ def show_graphs(data, predictions, train_loss_hist, val_loss_hist):
     if not t_hist.empty:
         plt.plot(t_hist.iloc[:,0], t_hist.iloc[:,1], label='Train')
     if not v_hist.empty:
-        plt.plot(v_hist.iloc[:,0], v_hist.iloc[:,1], label='Val')
+        plt.plot(v_hist.iloc[:,0], v_hist.iloc[:,1], label='Validation')
     plt.title("Loss Evolution")
     plt.legend()
     plt.savefig(os.path.join(graph_dir, "Loss_Evolution.png"))
@@ -253,7 +252,7 @@ def main():
     for s in SERIES_LIST:
         df_path = os.path.join(data_dir, 'train', f'train_df_{s}.csv')
         if not os.path.exists(df_path):
-            raise FileNotFoundError(f"Training data not found: {df_path}")
+            raise FileNotFoundError(f"Training data not found: {csv_path}")
         df = pd.read_csv(df_path)
         with open(os.path.join(data_dir, 'config', f'config_{s}.json'), 'r') as f:
             configs.append(json.load(f))
@@ -262,7 +261,7 @@ def main():
     # Combine datasets for training
     df_total = pd.concat(dfs, ignore_index=True)
     
-    # Added Data Cleaning: Remove potential NaNs or Infs that contaminate the network
+    # Cleaning data to avoid contamination with sensor artifacts
     df_total = df_total.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
     
     fs = configs[0]['FS_HOTFILM']
@@ -271,25 +270,24 @@ def main():
     X_raw = df_total[[f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z', 'reynolds']].values
     Y_raw = df_total[['velocity_x', 'velocity_y', 'velocity_z']].values
 
-    # Persist or Fit Scaler based on training mode
+    # Persist or Fit Scaler based on training mode and ensure consistent scaling for fine-tuning
     scaler_path = os.path.join(model_local, f'scaler_{SERIE_IDENTIFIER}.joblib')
     
     if BASE_MODEL_NAME:
-        # Fine-tuning mode: Loading original base scaler to maintain feature distribution
+        # Fine-tuning mode: LOADING original scaler from base model
         base_id = BASE_MODEL_NAME.replace("model_mlp_", "").replace(".pth", "")
         base_scaler_path = os.path.join(model_local, f'scaler_{base_id}.joblib')
         
         if os.path.exists(base_scaler_path):
-            print(f"[Fine-tuning] Loading base model scaler: {base_scaler_path}")
+            print(f"[Fine-tuning] Loading original scaler: {base_scaler_path}")
             scaler = joblib.load(base_scaler_path)
-            # Use transform to preserve the mean/std the model weights were trained with
-            X_scaled = scaler.transform(X_raw) 
+            X_scaled = scaler.transform(X_raw) # ONLY transform, NO fit
         else:
-            print("[Warning] Base scaler not found! Falling back to fit_transform.")
+            print("[Warning] Original base scaler not found! Fine-tuning might produce NaNs.")
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_raw)
     else:
-        # Standard mode: Create and fit new scaler
+        # Standard mode: Create new scaler
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_raw)
         
@@ -305,10 +303,11 @@ def main():
     if BASE_MODEL_NAME:
         print(f"\n[Fine-tuning] Loading base model weights: {BASE_MODEL_NAME}")
         h_layers, h_size = get_base_model_params(BASE_MODEL_NAME)
+        # Using specific learning rate and architecture for fine-tuning
         best_p = {
             'hidden_layers': h_layers, 
             'hidden_size': h_size, 
-            'learning_rate': 0.0005, # Slow adaptation learning rate
+            'learning_rate': 0.0005,
             'batch_size': 32
         }
         model = MLP(input_size, output_size, h_size, h_layers).to(device)
@@ -362,6 +361,9 @@ def main():
                 l_v = criterion(model(X), Y)
                 val_loss_hist.append([idx_v, l_v.item()]); idx_v += 1
 
+        if epoch % (EPOCHS / 8) == 0:
+            print("| Epoch {:4} | train loss {:4.4f} | val loss {:4.4f} |".format(epoch, train_loss_hist[-1][1] if train_loss_hist else 0, val_loss_hist[-1][1] if val_loss_hist else 0),flush=True)
+
     # --- EVALUATION ---
     model.eval()
     with torch.no_grad():
@@ -373,14 +375,17 @@ def main():
         final_slope = calculate_spectral_slope(pred_np, fs)
         final_iso = calculate_isotropy_ratio(pred_np, fs)
         
-        # RMSE calculation with safety mask against potential NaNs
+        # Target tensor and RMSE calculation
         target_tensor = torch.tensor(Y_raw).float().to(device)
         rmse = ((predictions - target_tensor)**2).mean().sqrt().item()
 
     # --- SAVE AND EXPORT ---
     dest = os.path.join(data_dir, 'train', 'results', f'results_{SERIE_IDENTIFIER}')
     os.makedirs(dest, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(model_local, f'model_mlp_{SERIE_IDENTIFIER}.pth'))
+    new_model_path = os.path.join(model_local, f'model_mlp_{SERIE_IDENTIFIER}.pth')
+    
+    torch.save(model.state_dict(), new_model_path)
+    print(f"\n[Done] Training complete. Model saved: {new_model_path}")
 
     pd.DataFrame({
         'Layers': [best_p['hidden_layers']], 'Size': [best_p['hidden_size']],

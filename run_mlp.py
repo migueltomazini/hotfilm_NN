@@ -38,7 +38,7 @@ Check the manual inside the following folder for data preparation details:
 
 # Global Definitions
 # Input size for the model
-input_size = 4          # Maintained 4 inputs (x,y,z + reynolds)
+input_size = 7          # Maintained 4 inputs (x,y,z + reynolds)
 output_size = 3
 
 START_TIME = time.time()
@@ -214,9 +214,14 @@ def validate_synthetic_results(serie, df_predicted):
             pred_x, pred_y, pred_z = pred_x[:min_len], pred_y[:min_len], pred_z[:min_len]
             ref_x, ref_y, ref_z = ref_x[:min_len], ref_y[:min_len], ref_z[:min_len]
         
-        rmse_x = np.sqrt(np.mean((pred_x - ref_x)**2))
-        rmse_y = np.sqrt(np.mean((pred_y - ref_y)**2))
-        rmse_z = np.sqrt(np.mean((pred_z - ref_z)**2))
+        # RMSE Calculation with protection against NaNs
+        mask_x = ~np.isnan(pred_x) & ~np.isnan(ref_x)
+        mask_y = ~np.isnan(pred_y) & ~np.isnan(ref_y)
+        mask_z = ~np.isnan(pred_z) & ~np.isnan(ref_z)
+
+        rmse_x = np.sqrt(np.mean((pred_x[mask_x] - ref_x[mask_x])**2))
+        rmse_y = np.sqrt(np.mean((pred_y[mask_y] - ref_y[mask_y])**2))
+        rmse_z = np.sqrt(np.mean((pred_z[mask_z] - ref_z[mask_z])**2))
         
         print("-" * 45)
         print(f"ERROR ANALYSIS (Predicted vs Synthetic Ground Truth)")
@@ -267,6 +272,8 @@ def runModel():
 
     # Load input data and apply feature scaling
     data_in = pd.read_csv(local_data)
+    
+    # Raw data cleaning to prevent NaN propagation
     data_in = data_in.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
 
     scaler_path = os.path.join(model_local, f'scaler_{MODEL_ID}.joblib')
