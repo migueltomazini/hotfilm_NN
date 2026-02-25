@@ -5,8 +5,8 @@ from hot-film voltage measurements. It supports both training from scratch (usin
 and fine-tuning an existing model to adapt to new King's Law constants and Reynolds numbers.
 
 Usage:
-    Normal Training: python3 train_mlp.py <series_id1>
-    Fine-tuning:     python3 train_mlp.py <new_series_id> <base_model_name.pth>
+    Train with one or more series: python3 train_mlp.py <series1> [series2 ...]
+    Fine-tuning (optional):        python3 train_mlp.py <series1> [series2 ...] <base_model_name.pth>
 """
 
 import os
@@ -37,8 +37,13 @@ warnings.filterwarnings("ignore", message=".*Optuna logging.*")
 
 info_output = '''
 Usage: 
-    Normal: python3 train_mlp.py <series_id1>
-    Fine-tuning: python3 train_mlp.py <new_series_id> <base_model_name.pth>
+    Train with one or more series: python3 train_mlp.py <series1> [series2 ...]
+    Fine-tuning (optional): python3 train_mlp.py <series1> [series2 ...] <base_model_name.pth>
+
+NOTA IMPORTANTE SOBRE FINE-TUNING:
+- Fine-tuning agora usa os HIPERPARAMETROS OTIMIZADOS do modelo base
+- O scaler e inteligentemente escolhido: reutilizado se Reynolds similar, novo se muito diferente
+- Isso melhora significativamente a generalizacao entre diferentes numeros de Reynolds
 '''
 
 # Global Definitions
@@ -65,9 +70,17 @@ if len(sys.argv) < 2:
     print(info_output)
     sys.exit()
 
-SERIES_LIST = [sys.argv[1]]
-BASE_MODEL_NAME = sys.argv[2] if len(sys.argv) > 2 else None
-SERIE_IDENTIFIER = SERIES_LIST[0]
+# Parse command line: allow multiple series IDs and optional base model (.pth)
+args = sys.argv[1:]
+BASE_MODEL_NAME = None
+if len(args) >= 2 and args[-1].endswith('.pth'):
+    BASE_MODEL_NAME = args[-1]
+    SERIES_LIST = args[:-1]
+else:
+    SERIES_LIST = args
+
+# Combined identifier for multi-series runs (used for filenames)
+SERIE_IDENTIFIER = "_".join(SERIES_LIST)
 
 # ==============================================================================
 # PHYSICS HELPER FUNCTIONS
