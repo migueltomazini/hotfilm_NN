@@ -260,7 +260,15 @@ def show_graphs(data, predictions, train_loss_hist, val_loss_hist):
 # MAIN
 # ==============================================================================
 
+def format_time(seconds):
+    """Convert seconds to a readable format (HH:MM:SS)."""
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}h {minutes:02d}m {secs:02d}s"
+
 def main():
+    script_start_time = time.time()
+    
     dfs, configs = [], []
     for s in SERIES_LIST:
         df_path = os.path.join(data_dir, 'train', f'train_df_{s}.csv')
@@ -294,7 +302,7 @@ def main():
         if os.path.exists(base_scaler_path):
             print(f"[Fine-tuning] Loading original scaler: {base_scaler_path}")
             scaler = joblib.load(base_scaler_path)
-            X_scaled = scaler.transform(X_raw) # ONLY transform, NO fit
+            X_scaled = scaler.transform(X_raw) 
         else:
             print("[Warning] Original base scaler not found! Fine-tuning might produce NaNs.")
             scaler = StandardScaler()
@@ -313,21 +321,36 @@ def main():
     Y_train, Y_val = Y_raw[:split], Y_raw[split:]
 
     # --- MODE SELECTION ---
+    optuna_start_time = None
+    optuna_duration = None
+    
     if BASE_MODEL_NAME:
         print(f"\n[Fine-tuning] Loading base model weights: {BASE_MODEL_NAME}")
         h_layers, h_size = get_base_model_params(BASE_MODEL_NAME)
-        # Using specific learning rate and architecture for fine-tuning
+
+        # Conservative hyperparameters for stable fine-tuning
         best_p = {
             'hidden_layers': h_layers, 
             'hidden_size': h_size, 
-            'learning_rate': 0.0005,
+            'learning_rate': 1e-4,
             'batch_size': 32
         }
+
         model = MLP(input_size, output_size, h_size, h_layers).to(device)
         model.load_state_dict(torch.load(os.path.join(model_local, BASE_MODEL_NAME), map_location=device))
+
+        # Freeze feature extraction layers to preserve previous knowledge
+        for param in model.input_layer.parameters():
+            param.requires_grad = False
+
+        for layer in model.hidden_layers[:-1]:
+            for param in layer.parameters():
+                param.requires_grad = False
+
         current_epochs = EPOCHS_FINETUNE
     else:
         print(f"\n[Optuna] Starting optimization from scratch...")
+        optuna_start_time = time.time()
 
         # Path to store per-series best parameters
         best_params_dir = os.path.join(data_dir, 'train', 'best_params')
@@ -345,12 +368,21 @@ def main():
             best_p = study.best_params
             with open(best_params_path, 'w') as fh:
                 json.dump(best_p, fh, indent=2)
+        
+        optuna_duration = time.time() - optuna_start_time
+        print(f"[Optuna] Optimization completed in {format_time(optuna_duration)}")
 
         model = MLP(input_size, output_size, best_p['hidden_size'], best_p['hidden_layers']).to(device)
         current_epochs = EPOCHS
 
     # --- FINAL TRAINING LOOP ---
-    optimizer = optim.Adam(model.parameters(), lr=best_p['learning_rate'])
+    training_start_time = time.time()
+    
+    optimizer = optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=best_p['learning_rate'],
+        weight_decay=1e-5
+    )
     criterion = nn.MSELoss()
     train_loader = DataLoader(VoltageVelocityDataset(X_train, Y_train, device), batch_size=best_p['batch_size'], shuffle=True)
     val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val, device), batch_size=best_p['batch_size'])
@@ -377,6 +409,8 @@ def main():
         if epoch % (EPOCHS / 8) == 0:
             print("| Epoch {:4} | train loss {:4.4f} | val loss {:4.4f} |".format(epoch, train_loss_hist[-1][1] if train_loss_hist else 0, val_loss_hist[-1][1] if val_loss_hist else 0),flush=True)
 
+    training_duration = time.time() - training_start_time
+    
     # --- EVALUATION ---
     model.eval()
     with torch.no_grad():
@@ -399,6 +433,19 @@ def main():
     
     torch.save(model.state_dict(), new_model_path)
     print(f"\n[Done] Training complete. Model saved: {new_model_path}")
+
+    # Calculate and display timing information
+    total_duration = time.time() - script_start_time
+    
+    # Build timing summary
+    print(f"\n{'='*60}")
+    print(f"⏱️  TIMING SUMMARY")
+    print(f"{'='*60}")
+    if optuna_duration is not None:
+        print(f"  Optuna Optimization: {format_time(optuna_duration)}")
+    print(f"  Final Training: {format_time(training_duration)}")
+    print(f"  Total Execution Time: {format_time(total_duration)}")
+    print(f"{'='*60}")
 
     pd.DataFrame({
         'Layers': [best_p['hidden_layers']], 'Size': [best_p['hidden_size']],
