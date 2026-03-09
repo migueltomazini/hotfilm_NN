@@ -14,6 +14,7 @@ import sys
 import time
 import json
 import warnings
+import logging
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
@@ -25,15 +26,18 @@ import matplotlib
 matplotlib.use('Agg')
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
-from scipy.signal import periodogram
-from scipy.stats import linregress
-from scipy.integrate import trapz
 import joblib
 import optuna
+
+# Import utility modules
+from utils import config, metrics, physics, data_loader
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*Optuna logging.*")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 info_output = '''
 Usage: 
@@ -46,21 +50,20 @@ NOTA IMPORTANTE SOBRE FINE-TUNING:
 - Isso melhora significativamente a generalizacao entre diferentes numeros de Reynolds
 '''
 
-# Global Definitions
-input_size = 4  
-output_size = 3 
-EPOCHS = 256
-EPOCHS_FINETUNE = 128
+# Use configuration constants
+input_size = config.INPUT_SIZE
+output_size = config.OUTPUT_SIZE
+EPOCHS = config.EPOCHS
+EPOCHS_FINETUNE = config.EPOCHS_FINETUNE
 START_TIME = time.time()
 
 # Column names in the input and output data
 input_df_name, output_df_name = "voltage", "velocity"
 
 # Model and directory configurations
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-model_local = os.path.join(BASE_DIR, 'models')
-data_dir = os.path.join(BASE_DIR, 'data')
-dir_base = BASE_DIR
+model_local = config.MODEL_DIR
+data_dir = config.DATA_DIR
+dir_base = config.BASE_DIR
 
 # Device configuration - using GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -81,53 +84,6 @@ else:
 
 # Combined identifier for multi-series runs (used for filenames)
 SERIE_IDENTIFIER = "_".join(SERIES_LIST)
-
-# ==============================================================================
-# PHYSICS HELPER FUNCTIONS
-# ==============================================================================
-
-def calculate_spectral_slope(velocity_signal, fs):
-    """Calculate PSD slope in the inertial subrange (Target -5/3)."""
-    if len(velocity_signal) < 512:
-        return -1.0
-
-    # Compute PSD from longitudinal component (u)
-    f, psd = periodogram(velocity_signal[:, 0], fs=fs)
-
-    # Inertial range: 5-50 Hz provides overlap for real and synthetic data
-    mask = (f >= 5.0) & (f <= 50.0)
-    if not np.any(mask):
-        return -1.0
-
-    # Protection against log10(0) that generates NaNs
-    log_f = np.log10(f[mask] + 1e-12)
-    log_psd = np.log10(psd[mask] + 1e-12)
-    
-    slope, _, _, _, _ = linregress(log_f, log_psd)
-    
-    if np.isnan(slope): return -1.0
-    return float(slope)
-
-def calculate_isotropy_ratio(velocity_signal, fs):
-    """Calculate the ratio between transverse and longitudinal energy (Target: 4/3)."""
-    if len(velocity_signal) < 512:
-        return 1.0
-
-    # Extract PSD for each component
-    f, psd_u = periodogram(velocity_signal[:, 0], fs=fs)
-    _, psd_v = periodogram(velocity_signal[:, 1], fs=fs)
-    _, psd_w = periodogram(velocity_signal[:, 2], fs=fs)
-    
-    mask = (f >= 5.0) & (f <= 50.0)
-    if not np.any(mask):
-        return 1.0
-        
-    # Energy in the inertial range using trapezoidal integration
-    energy_u = trapz(psd_u[mask], f[mask])
-    energy_trans = trapz((psd_v[mask] + psd_w[mask])/2, f[mask])
-    
-    # Protection against division by zero
-    return float(energy_trans / (energy_u + 1e-12))
 
 # ==============================================================================
 # MODEL AND DATASET
@@ -211,7 +167,7 @@ def objective(trial, X_train, Y_train, X_val, Y_val, fs):
     with torch.no_grad():
         preds = model(torch.tensor(X_val).float().to(device))
         mse = criterion(preds, torch.tensor(Y_val).float().to(device)).item()
-        slope = calculate_spectral_slope(preds.cpu().numpy(), fs)
+        slope = physics.calculate_spectral_slope(preds.cpu().numpy(), fs)
         slope_err = abs(slope - (-5/3)) / (5/3)
 
         # Added safety for NaN or infinite results during Optuna optimization
@@ -362,9 +318,24 @@ def main():
                 best_p = json.load(fh)
             print(f"[Optuna] Reusing saved parameters for {SERIE_IDENTIFIER}")
         else:
+            # Configure Optuna progress logging
+            optuna_progress_logger = logging.getLogger('optuna_progress')
+            optuna_progress_logger.setLevel(logging.INFO)
+            handler = logging.FileHandler('optuna_progress.log')
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+            optuna_progress_logger.addHandler(handler)
+            
+            def progress_callback(study, trial):
+                if trial.number % 5 == 0 or trial.number == 29:  # Log every 5 trials and last
+                    best_value = study.best_value if study.best_trial else float('inf')
+                    current_value = trial.value if trial.value is not None else float('inf')
+                    message = f"Trial {trial.number}: Current Score = {current_value:.6f}, Best Score = {best_value:.6f}"
+                    print(f"[Optuna Progress] {message}")
+                    optuna_progress_logger.info(message)
+            
             study = optuna.create_study(direction='minimize')
             optuna.logging.set_verbosity(optuna.logging.WARNING)
-            study.optimize(lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs), n_trials=30)
+            study.optimize(lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs), n_trials=30, callbacks=[progress_callback])
             best_p = study.best_params
             with open(best_params_path, 'w') as fh:
                 json.dump(best_p, fh, indent=2)
@@ -419,12 +390,12 @@ def main():
         
         # Predicted data extraction for physical validation
         pred_np = predictions.cpu().numpy()
-        final_slope = calculate_spectral_slope(pred_np, fs)
-        final_iso = calculate_isotropy_ratio(pred_np, fs)
+        final_slope = physics.calculate_spectral_slope(pred_np, fs)
+        final_iso = physics.calculate_isotropy_ratio(pred_np, fs)
         
         # Target tensor and RMSE calculation
         target_tensor = torch.tensor(Y_raw).float().to(device)
-        rmse = ((predictions - target_tensor)**2).mean().sqrt().item()
+        rmse = metrics.calculate_rmse_torch(predictions, target_tensor)
 
     # --- SAVE AND EXPORT ---
     dest = os.path.join(data_dir, 'train', 'results', f'results_{SERIE_IDENTIFIER}')
@@ -452,7 +423,7 @@ def main():
         'RMSE': [rmse], 'Final_Slope': [final_slope], 'Final_Isotropy': [final_iso]
     }).to_csv(os.path.join(dest, f'hyperparameters_{SERIE_IDENTIFIER}.csv'), index=False)
 
-    print(f"\n[Done] Training complete. Metrics: RMSE={rmse:.6f}, Slope={final_slope:.4f}, Isotropy={final_iso:.4f}")
+    logging.info(f"Training complete. Metrics: RMSE={rmse:.6f}, Slope={final_slope:.4f}, Isotropy={final_iso:.4f}")
     show_graphs(df_total, predictions, train_loss_hist, val_loss_hist)
 
 if __name__ == "__main__":

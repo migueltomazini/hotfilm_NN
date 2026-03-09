@@ -38,15 +38,93 @@ Tests with different datasets (clean, noisy, and datasets with sensor misalignme
 - **Noisy synthetic data**: Robust performance with errors < 4% in many cases.
 - **Real data with angle misalignment**: Effective correction of geometric errors.
 
-## Conclusions
+## Project Structure
 
-The results indicate that data-driven neural models can provide reliable velocity estimates from hot-film sensors, simplifying data collection and improving robustness compared to traditional analytical approaches.
+```
+hotfilm_NN/
+├── utils/                    # Utility modules
+│   ├── __init__.py
+│   ├── config.py            # Configuration constants
+│   ├── data_loader.py       # Data loading functions
+│   ├── metrics.py           # Error calculation functions
+│   └── physics.py           # Physics-based calculations
+├── tests/                   # Unit tests
+│   └── test_utils.py
+├── models/                  # Trained models
+├── data/                    # Data directories
+├── create_csv.py            # Data preparation script
+├── run_mlp.py               # Inference script
+├── spectrum.py              # Spectral analysis script
+├── train_mlp.py             # Training script
+├── requirements.txt         # Dependencies
+└── readme.md                # This file
+```
 
-## Future Work
+## Installation
 
-- Explore more advanced architectures (e.g., LSTM, temporal models) to capture time dependencies.
-- Gather larger and more diverse real datasets to improve generalization.
-- Extend the methodology to other sensing problems.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/LucasDuarte026/hotfilm_NN.git
+   cd hotfilm_NN
+   ```
+
+2. Create and activate virtual environment:
+   ```bash
+   python3 -m venv hotfilm_env
+   source hotfilm_env/bin/activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Usage
+
+### Data Preparation
+Prepare CSV files for training or inference:
+```bash
+python3 create_csv.py train <series_id> <reynolds_number>
+python3 create_csv.py run <series_id> <reynolds_number>
+```
+
+### Training
+Train a new model or fine-tune an existing one:
+```bash
+# Train from scratch
+python3 train_mlp.py <series1> [series2 ...]
+
+### Training
+Train a new model or fine-tune an existing one:
+```bash
+# Train from scratch
+python3 train_mlp.py <series1> [series2 ...]
+
+# Fine-tune existing model
+python3 train_mlp.py <series1> [series2 ...] <base_model.pth>
+```
+
+During training, Optuna hyperparameter optimization progress is displayed every 5 trials in the console and logged to `optuna_progress.log`.
+
+### Inference
+Run predictions on prepared data:
+```bash
+python3 run_mlp.py <series_id> <model_filename>
+```
+
+### Testing
+Run unit tests:
+```bash
+pytest tests/
+```
+
+## Key Features
+
+- **Modular Design**: Reusable utility modules for metrics, physics, and data handling.
+- **Physics-Informed**: Incorporates spectral analysis for turbulence validation.
+- **Optuna Optimization**: Automated hyperparameter tuning.
+- **Fine-Tuning Support**: Adapt models to new conditions without catastrophic forgetting (work in progress).
+- **Comprehensive Logging**: Detailed output with proper logging levels.
 
 ## Contributions
 

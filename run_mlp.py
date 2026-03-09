@@ -16,6 +16,7 @@ import os
 import sys
 import time
 import threading
+import logging
 import joblib
 
 import numpy as np
@@ -29,6 +30,9 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
 
+# Import utility modules
+from utils import config, metrics
+
 info_output = '''
 Usage: python3 run_mlp.py <series_id> <model_filename>
 
@@ -38,16 +42,19 @@ Check the manual inside the following folder for data preparation details:
 
 # Global Definitions
 # Input size for the model
-input_size = 7          # Maintained 4 inputs (x,y,z + reynolds)
-output_size = 3
+input_size = config.INPUT_SIZE
+output_size = config.OUTPUT_SIZE
 
 START_TIME = time.time()
 train_data_df=''
 input_df_name = "voltage"
 output_df_name = "velocity"
-model_local = './models'
+model_local = config.MODEL_DIR
 caminho_local = '.'
 caminho_cluster = '/home/lucasdu/algoritmo/2_cluster_architecture'
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 dir_base = caminho_local
 
 if (len(sys.argv) < 2 or sys.argv[1]== '?'):
@@ -219,16 +226,16 @@ def validate_synthetic_results(serie, df_predicted):
         mask_y = ~np.isnan(pred_y) & ~np.isnan(ref_y)
         mask_z = ~np.isnan(pred_z) & ~np.isnan(ref_z)
 
-        rmse_x = np.sqrt(np.mean((pred_x[mask_x] - ref_x[mask_x])**2))
-        rmse_y = np.sqrt(np.mean((pred_y[mask_y] - ref_y[mask_y])**2))
-        rmse_z = np.sqrt(np.mean((pred_z[mask_z] - ref_z[mask_z])**2))
+        rmse_x = metrics.calculate_rmse(pred_x[mask_x], ref_x[mask_x])
+        rmse_y = metrics.calculate_rmse(pred_y[mask_y], ref_y[mask_y])
+        rmse_z = metrics.calculate_rmse(pred_z[mask_z], ref_z[mask_z])
         
         print("-" * 45)
         print(f"ERROR ANALYSIS (Predicted vs Synthetic Ground Truth)")
-        print(f"RMSE Velocity X: {rmse_x:.12f}")
-        print(f"RMSE Velocity Y: {rmse_y:.12f}")
-        print(f"RMSE Velocity Z: {rmse_z:.12f}")
-        print("-" * 45)
+        logging.info(f"RMSE Velocity X: {rmse_x:.12f}")
+        logging.info(f"RMSE Velocity Y: {rmse_y:.12f}")
+        logging.info(f"RMSE Velocity Z: {rmse_z:.12f}")
+        logging.info("-" * 45)
     else:
         pass
 

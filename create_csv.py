@@ -21,6 +21,9 @@ import pandas as pd
 import sys
 import os
 
+# Import utility modules
+from utils import data_loader
+
 info = '''
 Check the manual inside the following folder to place the correct data to generate CSV files:
     manual/manual.txt
@@ -44,28 +47,9 @@ def train_create_CSV():
     velocity references, synchronizes by timestamp, and injects Reynolds number
     as a static feature. Output is rounded to 12 decimals for numerical precision.
     """
-    # Load high-frequency voltage data
-    voltage_path = f"./data/train/raw/collected_data_{serie}/hotfilm_{serie}.csv"
-    voltage_data = pd.read_csv(voltage_path, sep=',', header=None,
-                               names=['time', 'voltage_x', 'voltage_y', 'voltage_z'])
-
-    # Load reference velocity data (lower frequency sonic anemometer)
-    velocity_path = f'./data/train/raw/collected_data_{serie}/sonic_{serie}.csv'
-    velocity_data = pd.read_csv(velocity_path, sep=',', header=None,
-                                names=['time', 'velocity_x', 'velocity_y', 'velocity_z'])
-
-    # Synchronize datasets by timestamp
-    df_final = pd.merge(voltage_data, velocity_data, on='time')
-
-    # Add Reynolds number as a feature for physics-informed training
-    df_final['reynolds'] = re_value
-
-    # Round voltage and velocity columns to appropriate precision
-    voltage_cols = ['voltage_x', 'voltage_y', 'voltage_z']
-    velocity_cols = ['velocity_x', 'velocity_y', 'velocity_z']
-    for col in voltage_cols + velocity_cols:
-        if col in df_final.columns:
-            df_final[col] = df_final[col].round(12)
+    voltage_df = data_loader.load_voltage_data(serie, mode='train')
+    velocity_df = data_loader.load_velocity_data(serie)
+    df_final = data_loader.synchronize_and_merge(voltage_df, velocity_df, re_value)
 
     print("\nFinal training DataFrame (preview):\n")
     print(df_final.head())
@@ -81,19 +65,7 @@ def run_create_CSV():
     Loads hot-film voltage measurements and injects Reynolds number,
     formatting for input to pre-trained prediction models.
     """
-    # Load voltage data for prediction
-    voltage_path = f'./data/run/raw/collected_data_{serie}/hotfilm_{serie}.csv'
-    voltage_data = pd.read_csv(voltage_path, sep=',', header=None,
-                               names=['time', 'voltage_x', 'voltage_y', 'voltage_z'])
-
-    # Add Reynolds number feature
-    voltage_data['reynolds'] = re_value
-
-    # Round voltage columns to appropriate precision
-    voltage_cols = ['voltage_x', 'voltage_y', 'voltage_z']
-    for col in voltage_cols:
-        if col in voltage_data.columns:
-            voltage_data[col] = voltage_data[col].round(12)
+    voltage_data = data_loader.load_run_data(serie, re_value)
 
     output_path = f'./data/run/run_{serie}.csv'
     voltage_data.to_csv(output_path, index=False)
