@@ -29,13 +29,13 @@
  - Hot-film voltage CSV sampled at 2000 Hz.
  - Sonic anemometer velocity CSV sampled at 20 Hz.
 
- 1. Create a folder named `collected_data_xxx` under:
+ 1. Create a folder named `{serie}` under:
 
  ```
- data/raw_data/raw_train
+ data/raw
  ```
 
- 2. Place `hotfilm_xxx.csv` and `sonic_xxx.csv` in that folder.
+ 2. Place `hotfilm_{serie}.csv` and `sonic_{serie}.csv` in that folder.
 
  3. Generate the training CSV:
 
@@ -53,7 +53,7 @@
 
  ## Inference (Run)
 
- 1. Create `collected_data_xxx` under `data/raw_data/raw_run` and place `hotfilm_xxx.csv` there.
+ 1. Place the voltage data CSV in `data/raw/{serie}/hotfilm_{serie}.csv`.
  2. Prepare the run CSV:
 
  ```bash

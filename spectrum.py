@@ -321,7 +321,7 @@ def check_perfect_velocity_dissipation():
     """
     print("\n--- PERFECT VELOCITY DISSIPATION CHECK ---")
     
-    PERFECT_VEL_PATH = f"data/train/raw/collected_data_{SERIE}/hotfilm_vel_{SERIE}.csv"
+    PERFECT_VEL_PATH = f"data/raw/{SERIE}/hotfilm_vel_{SERIE}.csv"
     
     try:
         # Loads the data without using the first row as a header

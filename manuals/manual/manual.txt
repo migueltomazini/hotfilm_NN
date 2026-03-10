@@ -17,12 +17,12 @@ Requirements:
  - Hot-film voltage CSV sampled at 2000 Hz.
  - Sonic anemometer velocity CSV sampled at 20 Hz.
 
-1. Create a folder named `collected_data_xxx` under:
-	data/raw_data/raw_train
+1. Create a folder named `{serie}` under:
+	data/raw
 
 2. Place the two CSV files inside that folder:
-	data/raw_data/raw_train/collected_data_xxx/hotfilm_xxx.csv
-	data/raw_data/raw_train/collected_data_xxx/sonic_xxx.csv
+	data/raw/{serie}/hotfilm_{serie}.csv
+	data/raw/{serie}/sonic_{serie}.csv
 
 3. Generate the training CSV by running:
 	$ python3 create_csv.py train {serie}
@@ -33,7 +33,8 @@ Requirements:
 Training outputs (models and metadata) are saved under `data/train/train_results/` and `models/`.
 
 Run (Inference)
-1. Create `collected_data_xxx` under `data/raw_data/raw_run` and place `hotfilm_xxx.csv` there.
+1. Place the voltage data CSV in:
+	data/raw/{serie}/hotfilm_{serie}.csv
 2. Prepare the run CSV:
 	$ python3 create_csv.py run {serie}
 3. Run inference:

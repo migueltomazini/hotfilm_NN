@@ -172,7 +172,7 @@ def validate_synthetic_results(serie, df_predicted):
     Loads reference velocity data and calculates RMSE for each velocity component.
     Automatically detects if first row is header or data to handle format variations.
     """
-    ref_path = f"./data/run/raw/collected_data_{serie}/hotfilm_vel_{serie}.csv"
+    ref_path = f"./data/raw/{serie}/hotfilm_vel_{serie}.csv"
     
     if os.path.exists(ref_path):
         print(f"\n[Validation] Synthetic ground truth found: {ref_path}")
@@ -232,10 +232,10 @@ def validate_synthetic_results(serie, df_predicted):
         
         print("-" * 45)
         print(f"ERROR ANALYSIS (Predicted vs Synthetic Ground Truth)")
-        logging.info(f"RMSE Velocity X: {rmse_x:.12f}")
-        logging.info(f"RMSE Velocity Y: {rmse_y:.12f}")
-        logging.info(f"RMSE Velocity Z: {rmse_z:.12f}")
-        logging.info("-" * 45)
+        print(f"RMSE Velocity X: {rmse_x:.12f}")
+        print(f"RMSE Velocity Y: {rmse_y:.12f}")
+        print(f"RMSE Velocity Z: {rmse_z:.12f}")
+        print("-" * 45)
     else:
         pass
 
@@ -290,13 +290,20 @@ def runModel():
     X_raw = data_in[[f'{input_df_name}_x', f'{input_df_name}_y', f'{input_df_name}_z', 'reynolds']].values
     X_scaled = scaler.transform(X_raw)
 
-    # Perform predictions without computing gradients
+    # Perform predictions in batches to avoid GPU memory issues
+    batch_size = 1024  # Adjust based on GPU memory
+    predictions_list = []
     with torch.no_grad():
-        X_tensor = torch.tensor(X_scaled).float().to(device)
-        predictions = model(X_tensor)
+        for i in range(0, len(X_scaled), batch_size):
+            batch = X_scaled[i:i+batch_size]
+            X_tensor = torch.tensor(batch).float().to(device)
+            batch_predictions = model(X_tensor)
+            predictions_list.append(batch_predictions.cpu().numpy())
+    
+    # Concatenate all batch predictions
+    pred_np = np.concatenate(predictions_list, axis=0)
 
     # Combine inputs and predictions for output
-    pred_np = predictions.cpu().numpy()
     results_df = pd.DataFrame(pred_np, columns=[f'{output_df_name}_predicted_x', f'{output_df_name}_predicted_y', f'{output_df_name}_predicted_z'])
     df_final = pd.concat([data_in, results_df], axis=1)
 

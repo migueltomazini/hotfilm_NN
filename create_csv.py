@@ -47,7 +47,7 @@ def train_create_CSV():
     velocity references, synchronizes by timestamp, and injects Reynolds number
     as a static feature. Output is rounded to 12 decimals for numerical precision.
     """
-    voltage_df = data_loader.load_voltage_data(serie, mode='train')
+    voltage_df = data_loader.load_voltage_data(serie)
     velocity_df = data_loader.load_velocity_data(serie)
     df_final = data_loader.synchronize_and_merge(voltage_df, velocity_df, re_value)
 

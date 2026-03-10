@@ -9,20 +9,16 @@ import numpy as np
 import os
 
 
-def load_voltage_data(series_id: str, mode: str = 'train') -> pd.DataFrame:
+def load_voltage_data(series_id: str) -> pd.DataFrame:
     """Load voltage data from hot-film sensors.
 
     Args:
         series_id: Series identifier (e.g., '21180').
-        mode: 'train' or 'run' to specify data path.
 
     Returns:
         DataFrame with voltage data.
     """
-    if mode == 'train':
-        path = f"./data/train/raw/collected_data_{series_id}/hotfilm_{series_id}.csv"
-    else:
-        path = f"./data/run/raw/collected_data_{series_id}/hotfilm_{series_id}.csv"
+    path = f"./data/raw/{series_id}/hotfilm_{series_id}.csv"
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Voltage data file not found: {path}")
@@ -40,7 +36,7 @@ def load_velocity_data(series_id: str) -> pd.DataFrame:
     Returns:
         DataFrame with velocity data.
     """
-    path = f"./data/train/raw/collected_data_{series_id}/sonic_{series_id}.csv"
+    path = f"./data/raw/{series_id}/sonic_{series_id}.csv"
     if not os.path.exists(path):
         raise FileNotFoundError(f"Velocity data file not found: {path}")
 
@@ -81,6 +77,6 @@ def load_run_data(series_id: str, reynolds: float) -> pd.DataFrame:
     Returns:
         DataFrame with voltage data and Reynolds number.
     """
-    voltage_df = load_voltage_data(series_id, mode='run')
+    voltage_df = load_voltage_data(series_id)
     voltage_df['reynolds'] = reynolds
     return voltage_df.round(12)
