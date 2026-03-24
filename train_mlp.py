@@ -241,6 +241,15 @@ def main():
     # Cleaning data to avoid contamination with sensor artifacts
     df_total = df_total.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
     
+    # Redução para 20% dos dados apenas
+    reduc_factor = 0.20
+    original_size = len(df_total)
+    df_total = df_total.iloc[:int(original_size * reduc_factor)].reset_index(drop=True)
+    print(f"[Optimization] Usando apenas {reduc_factor*100}% dos dados cruzados.")
+    print(f"[Optimization] Dataset reduzido de {original_size} para {len(df_total)} linhas.")
+    # --------------------------------------------------
+
+    
     fs = configs[0]['FS_HOTFILM']
 
     # Extract features and targets

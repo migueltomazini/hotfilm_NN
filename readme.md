@@ -82,17 +82,18 @@ hotfilm_NN/
 ## Usage
 
 ### Data Preparation
-Prepare CSV files for training or inference:
+Prepare CSV files for training or inference.  The Reynolds number argument is now optional –
+if omitted the script will look for `RE_NUMBER` inside
+`data/config/config_<series_id>.json` and default to `0.0` otherwise:
+
 ```bash
-python3 create_csv.py train <series_id> <reynolds_number>
-python3 create_csv.py run <series_id> <reynolds_number>
+python3 create_csv.py train <series_id> [<reynolds_number>]
+python3 create_csv.py run <series_id> [<reynolds_number>]
 ```
 
-### Training
-Train a new model or fine-tune an existing one:
-```bash
-# Train from scratch
-python3 train_mlp.py <series1> [series2 ...]
+If you already have raw `.dat` files (as in series 0610) the loader will read
+those automatically; simply drop `hotfilm_<serie>.dat` and/or
+`sonic_<serie>.dat` under `data/raw/<serie>/`.
 
 ### Training
 Train a new model or fine-tune an existing one:
@@ -103,6 +104,24 @@ python3 train_mlp.py <series1> [series2 ...]
 # Fine-tune existing model
 python3 train_mlp.py <series1> [series2 ...] <base_model.pth>
 ```
+
+### Incremental / Online Training
+For real datasets such as the 0610 series the network can be trained
+block‑by‑block and adapt automatically as more data arrive.  The accompanying
+script handles segmentation based on gaps or fixed block size, computes the
+same RMSE/spectral/isotropy metrics used elsewhere and logs their evolution.
+
+Example usage:
+```bash
+# split by 10k samples per block
+python3 incremental_train.py 0610 --block-size 10000
+
+# split whenever a gap >0.2s occurs
+python3 incremental_train.py 0610 --gap 0.2
+```
+
+The per‑block statistics are written to `data/train/results/results_0610/block_metrics.csv`
+and a companion `block_evolution.png` plot is produced.
 
 During training, Optuna hyperparameter optimization progress is displayed every 5 trials in the console and logged to `optuna_progress.log`.
 

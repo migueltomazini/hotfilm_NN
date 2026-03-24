@@ -8,6 +8,19 @@ Before you start:
 
 3. All commands assume the current working directory is `./hotfilm_NN`.
 
+INCREMENTAL TRAINING
+--------------------
+For datasets that arrive in temporal blocks (real measurements, gaps between
+recordings, etc.) the network can be trained incrementally.  The `incremental_train.py`
+scripts splits the prepared CSV using a fixed number of samples or a gap threshold
+and fine-tunes the model block‑by‑block, logging RMSE and physics metrics for each.
+Run it similarly to the normal training script, adding `--block-size` or `--gap`:
+
+    python3 incremental_train.py 0610 --gap 0.1
+
+Metrics and intermediate models are stored under
+`data/train/results/results_<serie>/`.
+
 Use a consistent series identifier (e.g., `xxx`) for folders and files used by the scripts.
 
 Training
@@ -20,12 +33,15 @@ Requirements:
 1. Create a folder named `{serie}` under:
 	data/raw
 
-2. Place the two CSV files inside that folder:
-	data/raw/{serie}/hotfilm_{serie}.csv
-	data/raw/{serie}/sonic_{serie}.csv
+2. Place the raw data in that folder.  Both CSV and DAT formats are
+   supported; filenames may be either
+   `hotfilm_{serie}.csv` or `.dat`, and likewise for
+   `sonic_{serie}`.
 
-3. Generate the training CSV by running:
-	$ python3 create_csv.py train {serie}
+3. (Optional) if you have a Reynolds number, it may be passed to
+   `create_csv` or stored in the corresponding
+   `data/config/config_{serie}.json` as the `RE_NUMBER` field. If neither is
+   provided, the script will default the value to `0.0` and still proceed.
 
 4. Start training with:
 	$ python3 train_mlp.py {serie}

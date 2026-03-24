@@ -12,6 +12,7 @@ Example:
     python3 run_mlp.py 21180 model_mlp_21180.pth
 """
 
+import argparse
 import os
 import sys
 import time
@@ -57,22 +58,29 @@ caminho_cluster = '/home/lucasdu/algoritmo/2_cluster_architecture'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 dir_base = caminho_local
 
-if (len(sys.argv) < 2 or sys.argv[1]== '?'):
-    print(info_output)
-    sys.exit()
+# parse arguments with argparse to allow optional segmentation params
+parser = argparse.ArgumentParser(description="Run trained MLP on new voltage data")
+parser.add_argument('serie', help='series identifier (e.g. 21180)')
+parser.add_argument('model_filename', help='trained .pth model file stored in models/')
+parser.add_argument('--block-size', type=int, default=None, help='fixed block length for metrics')
+parser.add_argument('--gap', type=float, default=None, help='gap threshold (s) for metrics segmentation')
+args = parser.parse_args()
+BLOCK_SIZE = args.block_size
+GAP_THRESHOLD = args.gap
 
 # Select processing device (use GPU if available)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Processing device: {device}\n")
-    
+
 # ______________________________________________-_- RUN -_-______________________________________________________
 
-SERIE = sys.argv[1]                                     
-local_modelo = (f"{model_local}/{sys.argv[2]}")                   
-local_data = (f"{dir_base}/data/run/run_{SERIE}.csv")              
-local_destino = (f"{dir_base}/data/run/results/velocity_{SERIE}")                             
+SERIE = args.serie
+model_file = args.model_filename
+local_modelo = f"{model_local}/{model_file}"
+local_data = f"{dir_base}/data/run/run_{SERIE}.csv"
+local_destino = f"{dir_base}/data/run/results/velocity_{SERIE}"
 
-MODEL_ID = sys.argv[2].replace("model_mlp_", "").replace(".pth", "")
+MODEL_ID = model_file.replace("model_mlp_", "").replace(".pth", "")
 
 print("\n\n -- -- -- -- - -- -- -- ")
 print("Series name:\t", SERIE)
@@ -166,62 +174,62 @@ class VoltageVelocityDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.Y[idx]
     
-def validate_synthetic_results(serie, df_predicted):
+def validate_synthetic_results(serie, df_predicted, block_size=None, gap=None):
     """Compare predictions against synthetic ground truth if available.
 
-    Loads reference velocity data and calculates RMSE for each velocity component.
-    Automatically detects if first row is header or data to handle format variations.
+    If ``block_size`` or ``gap`` are provided the method also computes per-block
+    RMSE statistics (and spectral metrics later in ``block_analysis``).
     """
+    from utils.data_loader import prepare_blocks
+
+    # load config if present (used for sampling frequency)
+    cfg = {}
+    try:
+        with open(f'./data/config/config_{serie}.json') as fcfg:
+            cfg = json.load(fcfg)
+    except Exception:
+        pass
+    fs = cfg.get('FS_HOTFILM', 2000)
+
     ref_path = f"./data/raw/{serie}/hotfilm_vel_{serie}.csv"
-    
+    df_block_summary = []
+
     if os.path.exists(ref_path):
         print(f"\n[Validation] Synthetic ground truth found: {ref_path}")
         try:
-            # Auto-detect if first row needs to be skipped
             skip_rows = 0
             with open(ref_path, 'r') as f:
                 first_line = f.readline().strip()
                 try:
-                    # Try parsing first value as float
                     float(first_line.split(',')[0])
                 except (ValueError, IndexError):
-                    # First line is not numeric - skip it
                     skip_rows = 1
-            
-            # Read only as many rows as needed (large file optimization)
             n_predictions = len(df_predicted)
             df_ref = pd.read_csv(ref_path, sep=',', names=['time', 'velocity_x', 'velocity_y', 'velocity_z'], 
                                  skiprows=skip_rows, nrows=n_predictions, low_memory=False)
-            
-            # Convert to numeric, coercing errors
             for col in ['time', 'velocity_x', 'velocity_y', 'velocity_z']:
                 df_ref[col] = pd.to_numeric(df_ref[col], errors='coerce')
-            
-            # Remove rows with NaN
             df_ref = df_ref.dropna()
         except Exception as e:
             print(f"-> Warning: Could not parse reference file: {e}")
             return
-        
         if len(df_ref) == 0:
             print("-> Warning: No valid numeric data found in reference file.")
             return
-        
+
         pred_x = df_predicted[f'{output_df_name}_predicted_x'].values
         pred_y = df_predicted[f'{output_df_name}_predicted_y'].values
         pred_z = df_predicted[f'{output_df_name}_predicted_z'].values
-        
         ref_x = df_ref['velocity_x'].values
         ref_y = df_ref['velocity_y'].values
         ref_z = df_ref['velocity_z'].values
-        
+
         min_len = min(len(pred_x), len(ref_x))
         if len(pred_x) != len(ref_x):
             print(f"-> Note: Aligning data lengths ({len(pred_x)} vs {len(ref_x)}). Truncating to {min_len} rows.")
             pred_x, pred_y, pred_z = pred_x[:min_len], pred_y[:min_len], pred_z[:min_len]
             ref_x, ref_y, ref_z = ref_x[:min_len], ref_y[:min_len], ref_z[:min_len]
-        
-        # RMSE Calculation with protection against NaNs
+
         mask_x = ~np.isnan(pred_x) & ~np.isnan(ref_x)
         mask_y = ~np.isnan(pred_y) & ~np.isnan(ref_y)
         mask_z = ~np.isnan(pred_z) & ~np.isnan(ref_z)
@@ -229,15 +237,49 @@ def validate_synthetic_results(serie, df_predicted):
         rmse_x = metrics.calculate_rmse(pred_x[mask_x], ref_x[mask_x])
         rmse_y = metrics.calculate_rmse(pred_y[mask_y], ref_y[mask_y])
         rmse_z = metrics.calculate_rmse(pred_z[mask_z], ref_z[mask_z])
-        
+
         print("-" * 45)
         print(f"ERROR ANALYSIS (Predicted vs Synthetic Ground Truth)")
         print(f"RMSE Velocity X: {rmse_x:.12f}")
         print(f"RMSE Velocity Y: {rmse_y:.12f}")
         print(f"RMSE Velocity Z: {rmse_z:.12f}")
         print("-" * 45)
+
+        # if segmentation requested, compute block-wise RMSE
+        if block_size is not None or gap is not None:
+            merged = df_predicted.copy()
+            merged['ref_x'] = np.concatenate([ref_x, np.zeros(len(df_predicted)-len(ref_x))])[:len(df_predicted)]
+            merged['ref_y'] = np.concatenate([ref_y, np.zeros(len(df_predicted)-len(ref_y))])[:len(df_predicted)]
+            merged['ref_z'] = np.concatenate([ref_z, np.zeros(len(df_predicted)-len(ref_z))])[:len(df_predicted)]
+            blocks = prepare_blocks(merged, block_size=block_size, gap_threshold=gap)
+            for bi, b in enumerate(blocks):
+                rx = b['ref_x'].values
+                ry = b['ref_y'].values
+                rz = b['ref_z'].values
+                px = b[f'{output_df_name}_predicted_x'].values
+                py = b[f'{output_df_name}_predicted_y'].values
+                pz = b[f'{output_df_name}_predicted_z'].values
+                bx_rmse = metrics.calculate_rmse(px, rx)
+                by_rmse = metrics.calculate_rmse(py, ry)
+                bz_rmse = metrics.calculate_rmse(pz, rz)
+                print(f"Block {bi}: RMSE_x={bx_rmse:.6f}, RMSE_y={by_rmse:.6f}, RMSE_z={bz_rmse:.6f}")
+                df_block_summary.append({'block': bi, 'rmse_x': bx_rmse, 'rmse_y': by_rmse, 'rmse_z': bz_rmse})
+            if df_block_summary:
+                outpath = os.path.join(local_destino, 'block_rmse.csv')
+                pd.DataFrame(df_block_summary).to_csv(outpath, index=False)
+                print(f"Block RMSE table saved to {outpath}")
     else:
-        pass
+        # no reference file; we can still compute physics metrics per block
+        if block_size is not None or gap is not None:
+            merged = df_predicted.copy()
+            blocks = prepare_blocks(merged, block_size=block_size, gap_threshold=gap)
+            for bi, b in enumerate(blocks):
+                # compute slope/isotropy for each block
+                arr = b[[f'{output_df_name}_predicted_x', f'{output_df_name}_predicted_y', f'{output_df_name}_predicted_z']].values
+                slope = physics.calculate_spectral_slope(arr, fs=cfg.get('FS_HOTFILM', 2000))
+                iso = physics.calculate_isotropy_ratio(arr, fs=cfg.get('FS_HOTFILM', 2000))
+                print(f"Block {bi}: slope={slope:.4f}, isotropy={iso:.4f}")
+    # end validate
 
 def export_data_run(df, predictions, destino):
     """Save predictions to CSV file with input features.
@@ -280,6 +322,17 @@ def runModel():
     # Load input data and apply feature scaling
     data_in = pd.read_csv(local_data)
     
+    # add reynolds if missing (consult config)
+    if 'reynolds' not in data_in.columns:
+        try:
+            with open(f'./data/config/config_{SERIE}.json') as fh:
+                cfg_local = json.load(fh)
+            data_in['reynolds'] = cfg_local.get('RE_NUMBER', 0.0)
+            print(f"[Info] added missing reynolds={data_in['reynolds'].iloc[0]} from config")
+        except Exception:
+            data_in['reynolds'] = 0.0
+            print("[Warning] reynolds column missing, defaulted to 0.0")
+
     # Raw data cleaning to prevent NaN propagation
     data_in = data_in.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
 
@@ -320,8 +373,8 @@ def runModel():
 
     print(f"\nExecution finished. Results saved at: {output_file}")
 
-    # Optional validation against reference data
-    validate_synthetic_results(SERIE, df_final)
+    # Optional validation against reference data (or compute physics metrics per block)
+    validate_synthetic_results(SERIE, df_final, block_size=BLOCK_SIZE, gap=GAP_THRESHOLD)
 
 if __name__ == "__main__":
     print("\n\t Predicting wind velocity...")

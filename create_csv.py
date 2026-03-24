@@ -20,6 +20,7 @@ Example:
 import pandas as pd
 import sys
 import os
+import json
 
 # Import utility modules
 from utils import data_loader
@@ -31,13 +32,38 @@ Check the manual inside the following folder to place the correct data to genera
 Usage: python3 create_csv.py <mode: train/run> <series_id> <reynolds_number>
 '''
 
-if len(sys.argv) < 4:
+# mode and serie are mandatory; reynolds is optional
+if len(sys.argv) < 3:
     print(info)
     sys.exit()
 
 mode = sys.argv[1]
 serie = sys.argv[2]
-re_value = float(sys.argv[3])
+
+# try to obtain Reynolds number: first from CLI, else from config file
+re_value = None
+if len(sys.argv) >= 4:
+    try:
+        re_value = float(sys.argv[3])
+    except ValueError:
+        print("Warning: provided Reynolds number is not a valid float. Ignoring.")
+
+if re_value is None:
+    # attempt to read data/config/config_{serie}.json
+    cfg_path = f'./data/config/config_{serie}.json'
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, 'r') as fh:
+                cfg = json.load(fh)
+            re_value = cfg.get('RE_NUMBER', None)
+            if re_value is not None:
+                print(f"Reynolds number loaded from config: {re_value}")
+        except Exception:
+            pass
+
+if re_value is None:
+    print("Warning: Reynolds number not provided and not found in config; defaulting to 0.0")
+    re_value = 0.0
 
 # Function to create CSV files for training
 def train_create_CSV():
