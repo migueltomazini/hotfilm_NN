@@ -238,15 +238,13 @@ def main():
     # Combine datasets for training
     df_total = pd.concat(dfs, ignore_index=True)
     
-    # Cleaning data to avoid contamination with sensor artifacts
+    # Cleaning data
     df_total = df_total.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
-    
-    # Redução para 20% dos dados apenas
-    reduc_factor = 0.20
-    original_size = len(df_total)
-    df_total = df_total.iloc[:int(original_size * reduc_factor)].reset_index(drop=True)
-    print(f"[Optimization] Usando apenas {reduc_factor*100}% dos dados cruzados.")
-    print(f"[Optimization] Dataset reduzido de {original_size} para {len(df_total)} linhas.")
+
+    # REDUÇÃO PARA 20% DOS DADOS ---
+    # Para manter a lógica de "blocos", pegamos os 20% iniciais do dataframe total
+    df_total = df_total.iloc[:int(len(df_total) * 0.2)].reset_index(drop=True)
+    print(f"[Optimization] Treinando com os 20% iniciais dos dados para acelerar execução.")
     # --------------------------------------------------
 
     

@@ -24,6 +24,7 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 import joblib
+from scipy.signal import butter, filtfilt
 
 from utils import config, metrics, physics, data_loader
 import train_mlp
@@ -63,7 +64,6 @@ def load_block_model_and_scaler(serie: str, block_idx: int) -> Tuple[MLP, Standa
 
     return model, scaler
 
-
 def predict_on_block(model: MLP,
                      scaler: StandardScaler,
                      df: pd.DataFrame) -> np.ndarray:
@@ -84,6 +84,31 @@ def predict_on_block(model: MLP,
         preds = model(torch.tensor(X_scaled).float().to(device))
     return preds.cpu().numpy()
 
+def calculate_delta_metrics(y_true, y_pred, fs, cutoff=2.0):
+    """
+    Calcula o parâmetro Delta conforme Freire et al. (2023) Eq. 16.
+    y_true/y_pred: arrays (N, 3)
+    """
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    # Filtro de 4ª ordem (Butterworth)
+    b, a = butter(4, normal_cutoff, btype='low', analog=False)
+    
+    deltas = []
+    for i in range(3):
+        # Filtro filtfilt para fase zero (não atrasar o sinal)
+        s_true = filtfilt(b, a, y_true[:, i])
+        s_pred = filtfilt(b, a, y_pred[:, i])
+        
+        # Normalização (Z-score)
+        s_true_norm = (s_true - np.mean(s_true)) / np.std(s_true)
+        s_pred_norm = (s_pred - np.mean(s_pred)) / np.std(s_pred)
+        
+        # RMS da diferença
+        delta = np.sqrt(np.mean((s_pred_norm - s_true_norm)**2))
+        deltas.append(delta)
+        
+    return deltas
 
 def main():
     parser = argparse.ArgumentParser(
@@ -168,24 +193,41 @@ def main():
     df.to_csv(output_file, index=False)
     print(f"Predictions saved to {output_file}")
 
-    # Optionally compute metrics if ground truth is available
-    if args.calc_metrics and all(col in df.columns for col in ['velocity_x', 'velocity_y', 'velocity_z']):
-        Y_true = df[['velocity_x', 'velocity_y', 'velocity_z']].values
-        Y_pred = final_preds
-        rmse = metrics.calculate_rmse(Y_pred, Y_true)
-        print(f"\nMetrics on combined prediction set:")
-        print(f"   RMSE: {rmse:.6f}")
-
-        # Get FS from config for spectral analysis
-        with open(os.path.join(config.DATA_DIR, 'config', f'config_{serie}.json')) as fh:
-            cfg = json.load(fh)
-        fs = cfg['FS_HOTFILM']
+    # --- CÁLCULO DE MÉTRICAS (FOCO NO ARTIGO) ---
+    if args.calc_metrics:
+        target_cols = ['velocity_x', 'velocity_y', 'velocity_z']
         
-        slope = physics.calculate_spectral_slope(Y_pred, fs)
-        iso = physics.calculate_isotropy_ratio(Y_pred, fs)
-        print(f"   Spectral slope: {slope:.6f}")
-        print(f"   Isotropy ratio: {iso:.6f}")
+        if all(col in df.columns for col in target_cols):
+            print(f"\n{'='*50}")
+            print(f"📊 VALIDAÇÃO: MÉTRICAS DO ARTIGO (FREIRE ET AL, 2023)")
+            print(f"{'='*50}")
 
+            # Limpeza e extração de dados
+            df_clean = df.dropna(subset=target_cols + ['velocity_x_pred'])
+            Y_true = df_clean[target_cols].values
+            Y_pred = df_clean[['velocity_x_pred', 'velocity_y_pred', 'velocity_z_pred']].values
+            
+            # Pegar FS para o filtro
+            with open(os.path.join(config.DATA_DIR, 'config', f'config_{serie}.json')) as fh:
+                cfg = json.load(fh)
+            fs = cfg['FS_HOTFILM']
+
+            # 1. RMSE Bruto (ponto a ponto)
+            rmse_global = metrics.calculate_rmse(Y_pred, Y_true)
+            
+            # 2. Parâmetro Delta (Sinal filtrado em 2Hz e normalizado)
+            deltas = calculate_delta_metrics(Y_true, Y_pred, fs)
+
+            print(f"Registros avaliados: {len(df_clean)}")
+            print(f"RMSE Global Bruto:  {rmse_global:.6f}")
+            print(f"{'-'*50}")
+            print(f"Delta_u1 (Eixo X):  {deltas[0]:.4f}")
+            print(f"Delta_u2 (Eixo Y):  {deltas[1]:.4f}")
+            print(f"Delta_u3 (Eixo Z):  {deltas[2]:.4f}")
+            print(f"{'-'*50}")
+        else:
+            print("\n[Aviso] Colunas de velocidade não encontradas para cálculo de métricas.")
+            
     print("\nIncremental block prediction complete.")
 
 

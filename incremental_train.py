@@ -17,6 +17,7 @@ threshold (sensible for handling real datasets with irregular recording).
 Usage examples:
     python3 incremental_train.py <serie> [--num-blocks N]
     python3 incremental_train.py 0610 --num-blocks 10
+    python3 incremental_predict.py --num-blocks 10 0610 --calc-metrics --input data/train/train_df_0610.csv
 
 If ``--num-blocks`` is provided the file will be chunked into N contiguous blocks
 of approximately equal size.
@@ -268,11 +269,6 @@ def main():
         blocks = split_dataframe_into_n_blocks(df, NUM_BLOCKS)
     else:
         blocks = prepare_blocks(df, block_size=None, gap_threshold=None)
-
-    # Limitar a 20% dos blocos para otimização de tempo 
-    num_blocks_to_use = max(1, int(len(blocks) * 0.2))
-    print(f"[Optimization] Reduzindo de {len(blocks)} para {num_blocks_to_use} blocos para acelerar execução.")
-    blocks = blocks[:num_blocks_to_use]
 
     if len(blocks) == 0:
         print("No blocks extracted from the dataset. Exiting.")

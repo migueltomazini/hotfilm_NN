@@ -225,7 +225,6 @@ def calculate_dissipation_rate(E11: np.ndarray, k1_1: np.ndarray, E22: np.ndarra
     
     return epsilon
 
-
 def process_data(fig_num: int, data_predicted: np.ndarray, data_sonic: np.ndarray, u_component: str, calculate_epsilon_flag: bool):
     """
     Main function that calculates the periodogram, plots the raw spectrum, and 
