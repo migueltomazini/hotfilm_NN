@@ -16,7 +16,7 @@ def _find_raw_file(series_id: str, prefix: str) -> str:
     found.
     """
     base_dir = f"./data/raw/{series_id}"
-    for ext in ('csv', 'dat'):
+    for ext in ("csv", "dat"):
         candidate = os.path.join(base_dir, f"{prefix}_{series_id}.{ext}")
         if os.path.exists(candidate):
             return candidate
@@ -30,11 +30,13 @@ def _read_raw_file(path: str, columns: list[str]) -> pd.DataFrame:
         path: full path to file.
         columns: list of column names to assign (no header assumed).
     """
-    if path.lower().endswith('.csv'):
-        return pd.read_csv(path, sep=',', header=None, names=columns)
+    if path.lower().endswith(".csv"):
+        return pd.read_csv(path, sep=",", header=None, names=columns)
     else:
         # DAT file: use any whitespace delimiter, ignore comment lines
-        return pd.read_csv(path, delim_whitespace=True, comment='#', header=None, names=columns)
+        return pd.read_csv(
+            path, delim_whitespace=True, comment="#", header=None, names=columns
+        )
 
 
 def load_voltage_data(series_id: str) -> pd.DataFrame:
@@ -43,8 +45,8 @@ def load_voltage_data(series_id: str) -> pd.DataFrame:
     The function now accepts either CSV or DAT located under
     `data/raw/{series_id}`.
     """
-    path = _find_raw_file(series_id, 'hotfilm')
-    return _read_raw_file(path, ['time', 'voltage_x', 'voltage_y', 'voltage_z'])
+    path = _find_raw_file(series_id, "hotfilm")
+    return _read_raw_file(path, ["time", "voltage_x", "voltage_y", "voltage_z"])
 
 
 def load_velocity_data(series_id: str) -> pd.DataFrame:
@@ -52,12 +54,13 @@ def load_velocity_data(series_id: str) -> pd.DataFrame:
 
     Supports CSV or DAT files located under `data/raw/{series_id}`.
     """
-    path = _find_raw_file(series_id, 'sonic')
-    return _read_raw_file(path, ['time', 'velocity_x', 'velocity_y', 'velocity_z'])
+    path = _find_raw_file(series_id, "sonic")
+    return _read_raw_file(path, ["time", "velocity_x", "velocity_y", "velocity_z"])
 
 
-def synchronize_and_merge(voltage_df: pd.DataFrame, velocity_df: pd.DataFrame,
-                         reynolds: float) -> pd.DataFrame:
+def synchronize_and_merge(
+    voltage_df: pd.DataFrame, velocity_df: pd.DataFrame, reynolds: float
+) -> pd.DataFrame:
     """Synchronize voltage and velocity data by time and inject Reynolds number.
 
     Args:
@@ -69,12 +72,15 @@ def synchronize_and_merge(voltage_df: pd.DataFrame, velocity_df: pd.DataFrame,
         Merged DataFrame with synchronized data.
     """
     # Merge on time (assuming time is in seconds)
-    merged = pd.merge_asof(voltage_df.sort_values('time'),
-                          velocity_df.sort_values('time'),
-                          on='time', direction='nearest')
+    merged = pd.merge_asof(
+        voltage_df.sort_values("time"),
+        velocity_df.sort_values("time"),
+        on="time",
+        direction="nearest",
+    )
 
     # Inject Reynolds number as constant feature
-    merged['reynolds'] = reynolds
+    merged["reynolds"] = reynolds
 
     return merged.round(12)  # For numerical precision
 
@@ -90,10 +96,13 @@ def load_run_data(series_id: str, reynolds: float) -> pd.DataFrame:
         DataFrame with voltage data and Reynolds number.
     """
     voltage_df = load_voltage_data(series_id)
-    voltage_df['reynolds'] = reynolds
+    voltage_df["reynolds"] = reynolds
     return voltage_df.round(12)
 
-def split_dataframe_by_gap(df: pd.DataFrame, time_col: str = "time", gap_threshold: float = 0.1) -> list[pd.DataFrame]:
+
+def split_dataframe_by_gap(
+    df: pd.DataFrame, time_col: str = "time", gap_threshold: float = 0.1
+) -> list[pd.DataFrame]:
     """Split a dataframe whenever the interval between successive timestamps
     exceeds ``gap_threshold`` seconds. Useful for real data containing gaps.
 
@@ -126,11 +135,15 @@ def split_dataframe_fixed_size(df: pd.DataFrame, block_size: int) -> list[pd.Dat
     """
     if block_size <= 0:
         return [df]
-    return [df.iloc[i:i+block_size].reset_index(drop=True)
-            for i in range(0, len(df), block_size)]
+    return [
+        df.iloc[i : i + block_size].reset_index(drop=True)
+        for i in range(0, len(df), block_size)
+    ]
 
 
-def prepare_blocks(df: pd.DataFrame, block_size: int | None = None, gap_threshold: float | None = None) -> list[pd.DataFrame]:
+def prepare_blocks(
+    df: pd.DataFrame, block_size: int | None = None, gap_threshold: float | None = None
+) -> list[pd.DataFrame]:
     """Helper that chains the two splitting strategies.
 
     The order is gap-based splitting first, then fixed-size splitting.  Blocks
@@ -140,7 +153,9 @@ def prepare_blocks(df: pd.DataFrame, block_size: int | None = None, gap_threshol
     if gap_threshold is not None:
         new_blocks = []
         for b in blocks:
-            new_blocks.extend(split_dataframe_by_gap(b, time_col='time', gap_threshold=gap_threshold))
+            new_blocks.extend(
+                split_dataframe_by_gap(b, time_col="time", gap_threshold=gap_threshold)
+            )
         blocks = new_blocks
     if block_size is not None:
         new_blocks = []
@@ -149,4 +164,3 @@ def prepare_blocks(df: pd.DataFrame, block_size: int | None = None, gap_threshol
         blocks = new_blocks
     # Drop empty
     return [b for b in blocks if len(b) > 0]
-

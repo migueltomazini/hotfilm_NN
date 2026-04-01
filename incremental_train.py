@@ -59,9 +59,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # DATA SEGMENTATION HELPERS
 # ---------------------------------------------------------------------------
 
-def split_dataframe_by_gap(df: pd.DataFrame,
-                           time_col: str = "time",
-                           gap_threshold: float = 0.1) -> List[pd.DataFrame]:
+
+def split_dataframe_by_gap(
+    df: pd.DataFrame, time_col: str = "time", gap_threshold: float = 0.1
+) -> List[pd.DataFrame]:
     """Split a dataframe whenever there is a large gap between consecutive times.
 
     Args:
@@ -89,8 +90,7 @@ def split_dataframe_by_gap(df: pd.DataFrame,
     return blocks
 
 
-def split_dataframe_fixed_size(df: pd.DataFrame,
-                                block_size: int) -> List[pd.DataFrame]:
+def split_dataframe_fixed_size(df: pd.DataFrame, block_size: int) -> List[pd.DataFrame]:
     """Split dataframe into fixed-size blocks (by number of rows).
 
     Useful when there are no obvious gaps but you want to process chunks of a
@@ -98,12 +98,15 @@ def split_dataframe_fixed_size(df: pd.DataFrame,
     """
     if block_size <= 0:
         return [df]
-    return [df.iloc[i:i+block_size].reset_index(drop=True)
-            for i in range(0, len(df), block_size)]
+    return [
+        df.iloc[i : i + block_size].reset_index(drop=True)
+        for i in range(0, len(df), block_size)
+    ]
 
 
-def split_dataframe_into_n_blocks(df: pd.DataFrame,
-                                   n_blocks: int) -> List[pd.DataFrame]:
+def split_dataframe_into_n_blocks(
+    df: pd.DataFrame, n_blocks: int
+) -> List[pd.DataFrame]:
     """Split dataframe into exactly N blocks of approximately equal size.
 
     Uses numpy.array_split to ensure exactly N blocks are created.
@@ -127,9 +130,11 @@ def split_dataframe_into_n_blocks(df: pd.DataFrame,
     return blocks
 
 
-def prepare_blocks(df: pd.DataFrame,
-                   block_size: Optional[int] = None,
-                   gap_threshold: Optional[float] = None) -> List[pd.DataFrame]:
+def prepare_blocks(
+    df: pd.DataFrame,
+    block_size: Optional[int] = None,
+    gap_threshold: Optional[float] = None,
+) -> List[pd.DataFrame]:
     """Return a list of blocks according to the requested strategy."""
     blocks = [df]
     if gap_threshold is not None:
@@ -152,11 +157,14 @@ def prepare_blocks(df: pd.DataFrame,
 # TRAINING / EVALUATION UTILS
 # ---------------------------------------------------------------------------
 
-def train_on_block(model: torch.nn.Module,
-                   scaler: StandardScaler,
-                   block: pd.DataFrame,
-                   epochs: int,
-                   freeze: bool = False) -> torch.nn.Module:
+
+def train_on_block(
+    model: torch.nn.Module,
+    scaler: StandardScaler,
+    block: pd.DataFrame,
+    epochs: int,
+    freeze: bool = False,
+) -> torch.nn.Module:
     """Fit or fine-tune ``model`` on a single block of data.
 
     If ``freeze`` is True then only the output layer is trained (useful when the
@@ -164,11 +172,11 @@ def train_on_block(model: torch.nn.Module,
     otherwise all parameters are updated).
     """
     # extract the raw arrays
-    X_raw = block[['voltage_x', 'voltage_y', 'voltage_z', 'reynolds']].values
-    Y_raw = block[['velocity_x', 'velocity_y', 'velocity_z']].values
+    X_raw = block[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    Y_raw = block[["velocity_x", "velocity_y", "velocity_z"]].values
 
     # scale or fit
-    if hasattr(scaler, 'mean_') and scaler.mean_.shape[0] == X_raw.shape[1]:
+    if hasattr(scaler, "mean_") and scaler.mean_.shape[0] == X_raw.shape[1]:
         X_scaled = scaler.transform(X_raw)
     else:
         scaler.fit(X_raw)
@@ -178,7 +186,9 @@ def train_on_block(model: torch.nn.Module,
     X_train, X_val = X_scaled[:split], X_scaled[split:]
     Y_train, Y_val = Y_raw[:split], Y_raw[split:]
 
-    train_loader = DataLoader(VoltageVelocityDataset(X_train, Y_train, device), batch_size=32, shuffle=True)
+    train_loader = DataLoader(
+        VoltageVelocityDataset(X_train, Y_train, device), batch_size=32, shuffle=True
+    )
     val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val, device), batch_size=32)
 
     if freeze:
@@ -188,7 +198,9 @@ def train_on_block(model: torch.nn.Module,
             param.requires_grad = True
 
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+    )
 
     for epoch in range(epochs):
         model.train()
@@ -202,14 +214,13 @@ def train_on_block(model: torch.nn.Module,
     return model
 
 
-def evaluate_block(model: torch.nn.Module,
-                   scaler: StandardScaler,
-                   block: pd.DataFrame,
-                   fs: float) -> dict:
+def evaluate_block(
+    model: torch.nn.Module, scaler: StandardScaler, block: pd.DataFrame, fs: float
+) -> dict:
     """Compute error metrics for a single block and return a dict."""
-    X_raw = block[['voltage_x', 'voltage_y', 'voltage_z', 'reynolds']].values
-    Y_raw = block[['velocity_x', 'velocity_y', 'velocity_z']].values
-    if hasattr(scaler, 'mean_') and scaler.mean_.shape[0] == X_raw.shape[1]:
+    X_raw = block[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    Y_raw = block[["velocity_x", "velocity_y", "velocity_z"]].values
+    if hasattr(scaler, "mean_") and scaler.mean_.shape[0] == X_raw.shape[1]:
         X_scaled = scaler.transform(X_raw)
     else:
         X_scaled = scaler.fit_transform(X_raw)  # should not happen normally
@@ -219,49 +230,63 @@ def evaluate_block(model: torch.nn.Module,
     rmse = metrics.calculate_rmse(preds_np, Y_raw)
     slope = physics.calculate_spectral_slope(preds_np, fs)
     iso = physics.calculate_isotropy_ratio(preds_np, fs)
-    return {'rmse': rmse, 'slope': slope, 'isotropy': iso}
+    return {"rmse": rmse, "slope": slope, "isotropy": iso}
 
 
 # ---------------------------------------------------------------------------
 # MAIN SCRIPT
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Incremental training with block-wise metrics",
-        formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('serie', help='series identifier (e.g. 0610)')
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("serie", help="series identifier (e.g. 0610)")
     # allow both hyphen and underscore variants for familiarity
-    parser.add_argument('--num-blocks', '--num_blocks', dest='num_blocks', type=int, default=None,
-                        help='number of blocks to split the dataset into (approximately equal size)')
-    parser.add_argument('--base-model', type=str, default=None,
-                        help='path to an existing .pth file for warm start')
+    parser.add_argument(
+        "--num-blocks",
+        "--num_blocks",
+        dest="num_blocks",
+        type=int,
+        default=None,
+        help="number of blocks to split the dataset into (approximately equal size)",
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default=None,
+        help="path to an existing .pth file for warm start",
+    )
     args = parser.parse_args()
     NUM_BLOCKS = args.num_blocks
 
     serie = args.serie
     # load training data already prepared by create_csv.py
-    df_path = os.path.join(config.DATA_DIR, 'train', f'train_df_{serie}.csv')
+    df_path = os.path.join(config.DATA_DIR, "train", f"train_df_{serie}.csv")
     if not os.path.exists(df_path):
-        raise FileNotFoundError(f"Training data not found: {df_path}\nRun `python3 create_csv.py train {serie}` first.")
+        raise FileNotFoundError(
+            f"Training data not found: {df_path}\nRun `python3 create_csv.py train {serie}` first."
+        )
     df = pd.read_csv(df_path)
     # ensure reynolds feature exists (read from config if absent)
-    if 'reynolds' not in df.columns:
-        cfg_path = os.path.join(config.DATA_DIR, 'config', f'config_{serie}.json')
+    if "reynolds" not in df.columns:
+        cfg_path = os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
         re_val = 0.0
         if os.path.exists(cfg_path):
             try:
                 with open(cfg_path) as fh:
                     cfg_temp = json.load(fh)
-                re_val = cfg_temp.get('RE_NUMBER', 0.0)
+                re_val = cfg_temp.get("RE_NUMBER", 0.0)
             except Exception:
                 pass
-        df['reynolds'] = re_val
+        df["reynolds"] = re_val
         print(f"[Info] added missing reynolds column = {re_val}")
     # read FS from config JSON to pass to physics
-    with open(os.path.join(config.DATA_DIR, 'config', f'config_{serie}.json')) as fh:
+    with open(os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")) as fh:
         cfg = json.load(fh)
-    fs = cfg['FS_HOTFILM']
+    fs = cfg["FS_HOTFILM"]
 
     # segmentation
     if NUM_BLOCKS is not None:
@@ -280,12 +305,14 @@ def main():
     if args.base_model is not None and os.path.exists(args.base_model):
         # attempt to read the architecture from the metadata of the specified base model
         try:
-            h_layers, h_size = train_mlp.get_base_model_params(os.path.basename(args.base_model))
+            h_layers, h_size = train_mlp.get_base_model_params(
+                os.path.basename(args.base_model)
+            )
         except Exception:
             h_layers, h_size = 2, 64  # fallback defaults in case metadata is missing
         model = MLP(input_size, output_size, h_size, h_layers).to(device)
         model.load_state_dict(torch.load(args.base_model, map_location=device))
-        scaler = joblib.load(args.base_model.replace('.pth', '.joblib'))
+        scaler = joblib.load(args.base_model.replace(".pth", ".joblib"))
         print(f"Loaded base model and scaler from {args.base_model}")
     else:
         # start from scratch simple architecture
@@ -295,50 +322,64 @@ def main():
     results = []
     # iterate through blocks: first block trains from scratch, others fine-tune
     for i, block in enumerate(blocks):
-        print(f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) =====")
+        print(
+            f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) ====="
+        )
         if i == 0:
             model = train_on_block(model, scaler, block, epochs=EPOCHS)
         else:
             # freeze early layers after first block
-            model = train_on_block(model, scaler, block, epochs=EPOCHS_FINETUNE, freeze=True)
+            model = train_on_block(
+                model, scaler, block, epochs=EPOCHS_FINETUNE, freeze=True
+            )
 
         metrics_dict = evaluate_block(model, scaler, block, fs)
-        metrics_dict['block'] = i
-        metrics_dict['samples'] = len(block)
+        metrics_dict["block"] = i
+        metrics_dict["samples"] = len(block)
         results.append(metrics_dict)
 
         # optional: save intermediate model
         bloc_name = f"{serie}_block{i+1}"
-        out_folder = os.path.join(config.MODEL_DIR, 'incremental')
+        out_folder = os.path.join(config.MODEL_DIR, "incremental")
         os.makedirs(out_folder, exist_ok=True)
-        torch.save(model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth"))
+        torch.save(
+            model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
+        )
         joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
 
     # save results table
     results_df = pd.DataFrame(results)
-    res_path = os.path.join(config.DATA_DIR, 'train', 'results', f'results_{serie}', 'block_metrics.csv')
+    res_path = os.path.join(
+        config.DATA_DIR, "train", "results", f"results_{serie}", "block_metrics.csv"
+    )
     os.makedirs(os.path.dirname(res_path), exist_ok=True)
     results_df.to_csv(res_path, index=False)
     print(f"Block-wise metrics stored in {res_path}")
 
     # generate evolution plots
-    fig, ax = plt.subplots(3, 1, figsize=(6,8))
-    ax[0].plot(results_df['block'], results_df['rmse'], marker='o')
-    ax[0].set_ylabel('RMSE')
-    ax[1].plot(results_df['block'], results_df['slope'], marker='o')
-    ax[1].set_ylabel('Spectral slope')
-    ax[2].plot(results_df['block'], results_df['isotropy'], marker='o')
-    ax[2].set_ylabel('Isotropy')
-    ax[2].set_xlabel('Block index')
+    fig, ax = plt.subplots(3, 1, figsize=(6, 8))
+    ax[0].plot(results_df["block"], results_df["rmse"], marker="o")
+    ax[0].set_ylabel("RMSE")
+    ax[1].plot(results_df["block"], results_df["slope"], marker="o")
+    ax[1].set_ylabel("Spectral slope")
+    ax[2].plot(results_df["block"], results_df["isotropy"], marker="o")
+    ax[2].set_ylabel("Isotropy")
+    ax[2].set_xlabel("Block index")
     plt.tight_layout()
-    plot_path = os.path.join(config.DATA_DIR, 'train', 'results', f'results_{serie}', 'block_evolution.png')
+    plot_path = os.path.join(
+        config.DATA_DIR, "train", "results", f"results_{serie}", "block_evolution.png"
+    )
     fig.savefig(plot_path)
     plt.close(fig)
     print(f"Evolution plots saved to {plot_path}")
 
     # save final model
-    final_model_path = os.path.join(config.MODEL_DIR, 'incremental', f'model_{serie}_final.pth')
-    final_scaler_path = os.path.join(config.MODEL_DIR, 'incremental', f'scaler_{serie}_final.joblib')
+    final_model_path = os.path.join(
+        config.MODEL_DIR, "incremental", f"model_{serie}_final.pth"
+    )
+    final_scaler_path = os.path.join(
+        config.MODEL_DIR, "incremental", f"scaler_{serie}_final.joblib"
+    )
     torch.save(model.state_dict(), final_model_path)
     joblib.dump(scaler, final_scaler_path)
     print(f"\nFinal model saved to {final_model_path}")
@@ -347,5 +388,5 @@ def main():
     print("\nIncremental training complete.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

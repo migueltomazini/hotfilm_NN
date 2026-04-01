@@ -25,12 +25,12 @@ import json
 # Import utility modules
 from utils import data_loader
 
-info = '''
+info = """
 Check the manual inside the following folder to place the correct data to generate CSV files:
     manual/manual.txt
 
 Usage: python3 create_csv.py <mode: train/run> <series_id> <reynolds_number>
-'''
+"""
 
 # mode and serie are mandatory; reynolds is optional
 if len(sys.argv) < 3:
@@ -50,20 +50,23 @@ if len(sys.argv) >= 4:
 
 if re_value is None:
     # attempt to read data/config/config_{serie}.json
-    cfg_path = f'./data/config/config_{serie}.json'
+    cfg_path = f"./data/config/config_{serie}.json"
     if os.path.exists(cfg_path):
         try:
-            with open(cfg_path, 'r') as fh:
+            with open(cfg_path, "r") as fh:
                 cfg = json.load(fh)
-            re_value = cfg.get('RE_NUMBER', None)
+            re_value = cfg.get("RE_NUMBER", None)
             if re_value is not None:
                 print(f"Reynolds number loaded from config: {re_value}")
         except Exception:
             pass
 
 if re_value is None:
-    print("Warning: Reynolds number not provided and not found in config; defaulting to 0.0")
+    print(
+        "Warning: Reynolds number not provided and not found in config; defaulting to 0.0"
+    )
     re_value = 0.0
+
 
 # Function to create CSV files for training
 def train_create_CSV():
@@ -80,9 +83,10 @@ def train_create_CSV():
     print("\nFinal training DataFrame (preview):\n")
     print(df_final.head())
 
-    output_path = f'./data/train/train_df_{serie}.csv'
+    output_path = f"./data/train/train_df_{serie}.csv"
     df_final.to_csv(output_path, index=False)
     print(f"\nTraining dataset ready. Saved to: {output_path}\n")
+
 
 # Function to create CSV files for running
 def run_create_CSV():
@@ -93,9 +97,10 @@ def run_create_CSV():
     """
     voltage_data = data_loader.load_run_data(serie, re_value)
 
-    output_path = f'./data/run/run_{serie}.csv'
+    output_path = f"./data/run/run_{serie}.csv"
     voltage_data.to_csv(output_path, index=False)
     print(f"\nInference dataset ready. Saved to: {output_path}\n")
+
 
 if mode == "train":
     train_create_CSV()
