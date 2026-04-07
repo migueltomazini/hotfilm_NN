@@ -198,9 +198,9 @@ def main():
     final_preds = np.vstack(all_preds)
 
     # Add predictions to dataframe
-    df["velocity_x_pred"] = final_preds[:, 0]
-    df["velocity_y_pred"] = final_preds[:, 1]
-    df["velocity_z_pred"] = final_preds[:, 2]
+    df["velocity_predicted_x"] = final_preds[:, 0]
+    df["velocity_predicted_y"] = final_preds[:, 1]
+    df["velocity_predicted_z"] = final_preds[:, 2]
 
     # Determine output file
     if args.output is None:
@@ -218,7 +218,7 @@ def main():
     df.to_csv(output_file, index=False)
     print(f"Predictions saved to {output_file}")
 
-    # --- CÁLCULO DE MÉTRICAS (FOCO NO ARTIGO) ---
+    # --- CÁLCULO DE MÉTRICAS ---
     if args.calc_metrics:
         target_cols = ["velocity_x", "velocity_y", "velocity_z"]
 
@@ -228,10 +228,10 @@ def main():
             print(f"{'='*50}")
 
             # Limpeza e extração de dados
-            df_clean = df.dropna(subset=target_cols + ["velocity_x_pred"])
+            df_clean = df.dropna(subset=target_cols + ["velocity_predicted_x"])
             Y_true = df_clean[target_cols].values
             Y_pred = df_clean[
-                ["velocity_x_pred", "velocity_y_pred", "velocity_z_pred"]
+                ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
             ].values
 
             # Pegar FS para o filtro
@@ -261,47 +261,75 @@ def main():
 
     print("\nIncremental block prediction complete.")
 
-    # --- AUTOMATIC SPECTRAL ANALYSIS ---
+    # --- AUTOMATIC SPECTRAL ANALYSIS (MULTI-PLOT STYLE) ---
     print(f"\n{'='*50}")
-    print(f"📊 GENERATING AUTOMATIC SPECTRAL ANALYSIS")
+    print("📊 STARTING SPECTRAL VALIDATION (PRED VS SONIC)")
     print(f"{'='*50}")
 
-    # Define output directory for plots
+    # 1. Load Sonic Data safely (Ground Truth)
+    sonic_file = os.path.join(config.DATA_DIR, "train", f"train_df_{serie}.csv")
+    sonic_df = None
+    if os.path.exists(sonic_file):
+        print(f"[Spectral] Loading sonic reference from {sonic_file}")
+        # Optimize memory by loading only necessary columns and preserve the time index
+        sonic_df = pd.read_csv(
+            sonic_file,
+            usecols=["time", "velocity_x", "velocity_y", "velocity_z"],
+        )
+        # If sonic file is massive, take a representative sample to save RAM
+        if len(sonic_df) > 500000:
+            sonic_df = sonic_df.iloc[:500000].reset_index(drop=True)
+    else:
+        print(f"[Warning] Sonic file not found. Spectra will show predictions only.")
+
+    # 2. Setup Plotting Environment
     spectral_dir = os.path.join(output_dir, "plots_spectral")
     os.makedirs(spectral_dir, exist_ok=True)
 
-    # Get FS from config
     with open(os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")) as fh:
         cfg = json.load(fh)
-    fs_hf = cfg["FS_HOTFILM"]
+    fs_hf = spectral_utils.estimate_sampling_frequency(df, "time")
+    if fs_hf is None:
+        fs_hf = cfg.get("FS_HOTFILM", 2000)
 
-    pred_cols = ["velocity_x_pred", "velocity_y_pred", "velocity_z_pred"]
+    fs_sonic = None
+    if sonic_df is not None:
+        fs_sonic = spectral_utils.estimate_sampling_frequency(sonic_df, "time")
+    if fs_sonic is None:
+        fs_sonic = cfg.get("FS_SONIC", 20.0)
 
-    # 1. Global Spectrum (All data combined)
-    print("Generating global spectrum...")
-    global_plot_path = os.path.join(spectral_dir, f"spectrum_global_{serie}.png")
-    spectral_utils.plot_spectral_density(
-        df, pred_cols, fs_hf, f"Global Spectrum - Serie {serie}", global_plot_path
+    pred_cols = ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
+
+    # 3. Generate Global Spectrum (Full Prediction vs Sonic)
+    print("Generating global spectral comparison...")
+    spectral_utils.plot_combined_spectrum(
+        df,  # Use o DF completo com todas as predições concatenadas
+        pred_cols,
+        fs_hf,
+        f"Global Spectral Analysis (Pred vs Sonic) - Serie {serie}",
+        os.path.join(spectral_dir, f"combined_spectrum_global_{serie}.png"),
+        sonic_df=sonic_df,
+        fs_sonic=fs_sonic,
     )
 
-    # 2. Block-wise Spectrums
-    print(f"Generating spectra for {args.num_blocks} incremental blocks...")
-    # split_indices was defined earlier in main()
+    # 4. Generate Block-wise Spectra (Individual Incremental Steps)
+    print(f"Generating spectral plots for {args.num_blocks} data blocks...")
     for i, idx_list in enumerate(split_indices):
-        block_df = df.iloc[idx_list]
-        block_plot_path = os.path.join(
-            spectral_dir, f"spectrum_block_{i+1}_{serie}.png"
-        )
-        spectral_utils.plot_spectral_density(
-            block_df,
+        # Pass only the necessary slice and columns to the plotting function to save RAM
+        block_df_subset = df.iloc[idx_list][pred_cols]
+
+        spectral_utils.plot_combined_spectrum(
+            block_df_subset,
             pred_cols,
             fs_hf,
-            f"Block {i+1} Spectrum - Serie {serie}",
-            block_plot_path,
+            f"Spectral Analysis Block {i+1} vs Sonic - Serie {serie}",
+            os.path.join(spectral_dir, f"combined_spectrum_block_{i+1}_{serie}.png"),
+            sonic_df=sonic_df,
+            fs_sonic=fs_sonic,
         )
+        print(f" -> Saved block {i+1}/{args.num_blocks}")
 
-    print(f"Spectral plots saved to: {spectral_dir}")
-    print("\nIncremental block prediction complete.")
+    print(f"\n[Done] All spectral plots are available in: {spectral_dir}")
 
 
 if __name__ == "__main__":

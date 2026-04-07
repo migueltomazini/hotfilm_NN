@@ -4,35 +4,28 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import periodogram
-from scipy.integrate import trapz
+from scipy.integrate import trapezoid as trapz
 import json
 
-# ==============================================================================
-# 1. CONFIGURATION AND DATA READING
-# ==============================================================================
+from utils import spectral_utils
+
+print("Starting spectrum.py")
 
 info_output = """
 Check the manual inside the following folder to place the correct data to generate the spectrum:
     manuals/manual.txt
-Usage: python3 script_name.py <SERIE>
+Usage: python3 script_name.py <SERIE> [--predicted-path PATH] [--sonic-path PATH]
 """
 
-if len(sys.argv) < 2 or len(sys.argv) > 3:
+if len(sys.argv) < 2:
     print(info_output)
-    sys.exit()
+    sys.exit(1)
 
 SERIE = sys.argv[1]
 
 # --- USER INPUT FOR DISSIPATION CALCULATION ---
-calc_epsilon_model = (
-    input(
-        "\nDo you want to calculate the Dissipation Rate (ε) from the predicted model? (y/n): "
-    ).lower()
-    == "y"
-)
-calc_validation_test = (
-    input("Do you want to run the Theoretical Validation Test? (y/n): ").lower() == "y"
-)
+calc_epsilon_model = False  # Disabled for now
+calc_validation_test = False  # Disabled for now
 
 # Defines if any calculation requiring constants (JSON) is necessary
 needs_config = calc_epsilon_model or calc_validation_test
@@ -78,10 +71,27 @@ if needs_config:
 
 
 # Reading velocity data (time series)
-data_predicted = pd.read_csv(
-    f"./data/run/results/velocity_{SERIE}/velocity_{SERIE}.csv", sep=","
-)
-data_sonic = pd.read_csv(f"./data/train/train_df_{SERIE}.csv", sep=",")
+predicted_path = f"./data/run/results/velocity_{SERIE}/velocity_{SERIE}.csv"
+sonic_train_path = f"./data/train/train_df_{SERIE}.csv"
+sonic_raw_dat = f"./data/raw/{SERIE}/sonic_{SERIE}.dat"
+sonic_raw_csv = f"./data/raw/{SERIE}/sonic_{SERIE}.csv"
+
+if os.path.exists(sonic_raw_dat):
+    print(f"[Spectrum] Loading sonic raw data from {sonic_raw_dat}")
+    data_sonic = pd.read_csv(
+        sonic_raw_dat,
+        delim_whitespace=True,
+        header=None,
+        names=["time", "velocity_x", "velocity_y", "velocity_z"],
+    )
+elif os.path.exists(sonic_raw_csv):
+    print(f"[Spectrum] Loading sonic raw data from {sonic_raw_csv}")
+    data_sonic = pd.read_csv(sonic_raw_csv, sep=",")
+else:
+    print(f"[Spectrum] Loading sonic training data from {sonic_train_path}")
+    data_sonic = pd.read_csv(sonic_train_path, sep=",")
+
+data_predicted = pd.read_csv(predicted_path, sep=",")
 
 # Definition of the exponent and the reference line (-5/3) for the log-log plot
 x_aux = np.linspace(1, 1000, 1000, endpoint=False)
@@ -266,132 +276,6 @@ def calculate_dissipation_rate(
     return epsilon
 
 
-def process_data(
-    fig_num: int,
-    data_predicted: np.ndarray,
-    data_sonic: np.ndarray,
-    u_component: str,
-    calculate_epsilon_flag: bool,
-):
-    """
-    Main function that calculates the periodogram, plots the raw spectrum, and
-    stores the smoothed data for the epsilon calculation.
-
-    Args:
-        fig_num: Matplotlib figure number.
-        data_predicted: Predicted fluctuation series.
-        data_sonic: Sonic fluctuation series.
-        u_component: Velocity component name.
-        calculate_epsilon_flag: Flag to determine if the epsilon calculation should be executed.
-    """
-
-    # Creation of the folder where the graphs will be saved
-    if not os.path.exists(f"data/run/results/velocity_{SERIE}/graphics/"):
-        os.mkdir(f"data/run/results/velocity_{SERIE}/graphics/")
-
-    plt.figure(fig_num)
-
-    # Calculation of the periodogram using fluctuations (u' series)
-    freqs_predicted, power_spectrum_predicted_raw = periodogram(
-        data_predicted, fs=FS_HOTFILM
-    )
-    freqs_sonic, power_spectrum_sonic_raw = periodogram(data_sonic, fs=FS_SONIC)
-
-    if calculate_epsilon_flag:
-        # -------------------------------------------------------------
-        # SMOOTHING FOR EPSILON CALCULATION (Smoothed data)
-        # -------------------------------------------------------------
-        # Epsilon calculation uses the smoothed spectrum for greater numerical stability.
-        freqs_predicted_smooth, power_spectrum_predicted_smooth = log_bin_smoothing(
-            freqs_predicted, power_spectrum_predicted_raw
-        )
-
-        E_predicted, k1_predicted = spectral_density_to_energy_spectrum(
-            power_spectrum_predicted_smooth, freqs_predicted_smooth, MEAN_VELOCITY
-        )
-
-        # Stores the spectra in global variables
-        global E11_pred, E22_pred, E33_pred, k1_1_pred, k1_2_pred, k1_3_pred
-
-        if u_component == "velocity_x":
-            E11_pred = E_predicted
-            k1_1_pred = k1_predicted
-        elif u_component == "velocity_y":
-            E22_pred = E_predicted
-            k1_2_pred = k1_predicted
-        elif u_component == "velocity_z":
-            E33_pred = E_predicted
-            k1_3_pred = k1_predicted
-
-        # The final epsilon calculation is performed after processing the last component (u3/velocity_z)
-        if (
-            u_component == "velocity_z"
-            and E11_pred is not None
-            and E22_pred is not None
-            and E33_pred is not None
-        ):
-            try:
-                epsilon_predicted = calculate_dissipation_rate(
-                    E11_pred,
-                    k1_1_pred,
-                    E22_pred,
-                    k1_2_pred,
-                    E33_pred,
-                    k1_3_pred,
-                    KINEMATIC_VISCOSITY,
-                )
-                print(f"\n===========================================================")
-                print(f"Dissipation Rate (ε) (Predicted Hot-Film Model):")
-                print(f"u1_bar used: {MEAN_VELOCITY:.3f} m/s")
-                print(f"ε = {epsilon_predicted:.4e} [m^2/s^3]")
-                print(
-                    f"Relative Difference: {abs(epsilon_predicted - EPSILON_EXPECTED) / EPSILON_EXPECTED * 100:.2f} %"
-                )
-                print(f"===========================================================")
-            except Exception as e:
-                print(f"Error in final epsilon calculation: {e}")
-
-    # -------------------------------------------------------------
-    # PLOTTING THE RAW SPECTRUM
-    # -------------------------------------------------------------
-    plt.loglog(
-        freqs_predicted,
-        power_spectrum_predicted_raw,
-        label=f"Predicted ({u_component})",
-        alpha=0.85,
-    )
-    plt.loglog(
-        freqs_sonic,
-        power_spectrum_sonic_raw,
-        label=f"Sonic ({u_component})",
-        alpha=0.85,
-    )
-    plt.loglog(x_aux, y_aux, label="Reference Slope (-5/3)", alpha=0.9, linewidth=2.5)
-
-    # Adds the smoothed spectrum to the plot if epsilon calculation was requested (for visualization)
-    if calculate_epsilon_flag and "freqs_predicted_smooth" in locals():
-        plt.loglog(
-            freqs_predicted_smooth,
-            power_spectrum_predicted_smooth,
-            label="Smoothed (Calculation)",
-            alpha=0.85,
-        )
-
-    # Adjust Y for better visualization (clears low value noise)
-    plt.ylim(1e-18, 1e4)
-
-    plt.xlabel("Frequency")
-    plt.ylabel("Spectral Density")
-
-    plt.title(f"Periodogram of {u_component} time series (Predicted and Sonic)")
-    plt.legend(loc="lower left")
-    plt.savefig(
-        f"data/run/results/velocity_{SERIE}/graphics/Periodogram_{u_component}.png",
-        format="png",
-        bbox_inches="tight",
-    )
-
-
 # --- Perfect Velocity Check Function ---
 
 
@@ -467,27 +351,40 @@ def check_perfect_velocity_dissipation():
 # ==============================================================================
 
 # Executes processing and plots the periodogram for the 3 components
-process_data(
-    0,
-    u_predicted_fluc["velocity_x"],
-    u_sonic_fluc["velocity_x"],
-    "velocity_x",
-    calc_epsilon_model,
+# Define columns to look for
+pred_cols = ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
+
+# This replaces the 3 individual function calls and manual plotting
+print("Generating modularized spectrum plot...")
+output_path = f"data/run/results/velocity_{SERIE}/graphics/Combined_Periodogram.png"
+
+os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+fs_pred_actual = spectral_utils.estimate_sampling_frequency(data_predicted, "time")
+if fs_pred_actual is None:
+    fs_pred_actual = FS_HOTFILM
+
+fs_sonic_actual = spectral_utils.estimate_sampling_frequency(data_sonic, "time")
+if fs_sonic_actual is None:
+    fs_sonic_actual = FS_SONIC
+
+print(
+    f"[Spectrum] Using fs_pred = {fs_pred_actual} Hz, fs_sonic = {fs_sonic_actual} Hz"
 )
-process_data(
-    1,
-    u_predicted_fluc["velocity_y"],
-    u_sonic_fluc["velocity_y"],
-    "velocity_y",
-    calc_epsilon_model,
-)
-process_data(
-    2,
-    u_predicted_fluc["velocity_z"],
-    u_sonic_fluc["velocity_z"],
-    "velocity_z",
-    calc_epsilon_model,
-)
+
+try:
+    spectral_utils.plot_combined_spectrum(
+        data_predicted,
+        pred_cols,
+        fs_pred_actual,
+        f"Spectral Comparison - Serie {SERIE}",
+        output_path,
+        sonic_df=data_sonic,
+        fs_sonic=fs_sonic_actual,
+    )
+    print(f"Plot saved to {output_path}")
+except Exception as e:
+    print(f"Failed to generate plot: {e}")
 
 
 # --- THEORETICAL VALIDATION TEST ---

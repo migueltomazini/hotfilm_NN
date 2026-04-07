@@ -54,54 +54,9 @@ EPOCHS_FINETUNE = 25  # reduced for fine-tuning
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 # ---------------------------------------------------------------------------
 # DATA SEGMENTATION HELPERS
 # ---------------------------------------------------------------------------
-
-
-def split_dataframe_by_gap(
-    df: pd.DataFrame, time_col: str = "time", gap_threshold: float = 0.1
-) -> List[pd.DataFrame]:
-    """Split a dataframe whenever there is a large gap between consecutive times.
-
-    Args:
-        df: input dataframe, must be sorted by ``time_col``.
-        time_col: name of the time column.
-        gap_threshold: gap in seconds that signals a new block.
-
-    Returns:
-        list of contiguous dataframes (blocks).
-    """
-    if df.empty:
-        return []
-    dt = df[time_col].diff().fillna(0)
-    # breakpoints are where dt > threshold
-    splits = np.where(dt > gap_threshold)[0]
-    if len(splits) == 0:
-        return [df]
-    blocks = []
-    start = 0
-    for idx in splits:
-        blocks.append(df.iloc[start:idx].reset_index(drop=True))
-        start = idx
-    # final block
-    blocks.append(df.iloc[start:].reset_index(drop=True))
-    return blocks
-
-
-def split_dataframe_fixed_size(df: pd.DataFrame, block_size: int) -> List[pd.DataFrame]:
-    """Split dataframe into fixed-size blocks (by number of rows).
-
-    Useful when there are no obvious gaps but you want to process chunks of a
-    given length.  The last block may be shorter than ``block_size``.
-    """
-    if block_size <= 0:
-        return [df]
-    return [
-        df.iloc[i : i + block_size].reset_index(drop=True)
-        for i in range(0, len(df), block_size)
-    ]
 
 
 def split_dataframe_into_n_blocks(
@@ -294,6 +249,8 @@ def main():
         blocks = split_dataframe_into_n_blocks(df, NUM_BLOCKS)
     else:
         blocks = prepare_blocks(df, block_size=None, gap_threshold=None)
+
+    blocks = [b.iloc[: int(len(b) * 0.2)].reset_index(drop=True) for b in blocks]
 
     if len(blocks) == 0:
         print("No blocks extracted from the dataset. Exiting.")
