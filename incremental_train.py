@@ -3,7 +3,10 @@
 This script is designed to process a time series dataset (real or synthetic) that
 is naturally divided into chronological blocks, either due to data gaps or by
 choice. It trains an MLP model on the first available block and then fine-tunes
-it sequentially on each new block as it "arrives". At every step the script
+it sequentially on each new block as it "arrives". Alternatively, with the
+--scattered flag, it trains initially with scattered initial data from each
+block and then fine-tunes with each full block. The --percentage flag controls
+the percentage of data used from each block in sequential mode. At every step the script
 calculates the same error metrics used elsewhere in the project (RMSE, spectral
 slope, isotropy ratio) and records them in a CSV so the user can monitor the
 model evolution.
@@ -17,6 +20,8 @@ threshold (sensible for handling real datasets with irregular recording).
 Usage examples:
     python3 incremental_train.py <serie> [--num-blocks N]
     python3 incremental_train.py 0610 --num-blocks 10
+    python3 incremental_train.py 0610 --num-blocks 10 --scattered
+    python3 incremental_train.py 0610 --num-blocks 10 --percentage 50
     python3 incremental_predict.py --num-blocks 10 0610 --calc-metrics --input data/train/train_df_0610.csv
 
 If ``--num-blocks`` is provided the file will be chunked into N contiguous blocks
@@ -183,9 +188,7 @@ def evaluate_block(
         preds = model(torch.tensor(X_scaled).float().to(device))
     preds_np = preds.cpu().numpy()
     rmse = metrics.calculate_rmse(preds_np, Y_raw)
-    slope = physics.calculate_spectral_slope(preds_np, fs)
-    iso = physics.calculate_isotropy_ratio(preds_np, fs)
-    return {"rmse": rmse, "slope": slope, "isotropy": iso}
+    return {"rmse": rmse}
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +217,21 @@ def main():
         default=None,
         help="path to an existing .pth file for warm start",
     )
+    parser.add_argument(
+        "--scattered",
+        action="store_true",
+        help="Use scattered training mode: train initially with initial data from each block, then fine-tune with full blocks.",
+    )
+    parser.add_argument(
+        "--percentage",
+        type=float,
+        default=20.0,
+        help="Percentage of data to use from each block in sequential mode (default 20.0)",
+    )
     args = parser.parse_args()
     NUM_BLOCKS = args.num_blocks
+    SCATTERED = args.scattered
+    PERCENTAGE = args.percentage
 
     serie = args.serie
     # load training data already prepared by create_csv.py
@@ -250,7 +266,11 @@ def main():
     else:
         blocks = prepare_blocks(df, block_size=None, gap_threshold=None)
 
-    blocks = [b.iloc[: int(len(b) * 0.2)].reset_index(drop=True) for b in blocks]
+    if not SCATTERED:
+        blocks = [
+            b.iloc[: int(len(b) * PERCENTAGE / 100)].reset_index(drop=True)
+            for b in blocks
+        ]
 
     if len(blocks) == 0:
         print("No blocks extracted from the dataset. Exiting.")
@@ -277,32 +297,57 @@ def main():
         scaler = StandardScaler()
 
     results = []
-    # iterate through blocks: first block trains from scratch, others fine-tune
-    for i, block in enumerate(blocks):
-        print(
-            f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) ====="
-        )
-        if i == 0:
-            model = train_on_block(model, scaler, block, epochs=EPOCHS)
-        else:
-            # freeze early layers after first block
+    if SCATTERED:
+        # Initial training with scattered data
+        initial_blocks = [block.iloc[: len(block) // NUM_BLOCKS] for block in blocks]
+        initial_df = pd.concat(initial_blocks).reset_index(drop=True)
+        print(f"Initial training with {len(initial_df)} scattered samples")
+        model = train_on_block(model, scaler, initial_df, epochs=EPOCHS)
+        # Now fine-tune with each full block
+        for i, block in enumerate(blocks):
+            print(
+                f"\n===== Fine-tuning block {i+1}/{len(blocks)} ({len(block)} samples) ====="
+            )
             model = train_on_block(
                 model, scaler, block, epochs=EPOCHS_FINETUNE, freeze=True
             )
-
-        metrics_dict = evaluate_block(model, scaler, block, fs)
-        metrics_dict["block"] = i
-        metrics_dict["samples"] = len(block)
-        results.append(metrics_dict)
-
-        # optional: save intermediate model
-        bloc_name = f"{serie}_block{i+1}"
-        out_folder = os.path.join(config.MODEL_DIR, "incremental")
-        os.makedirs(out_folder, exist_ok=True)
-        torch.save(
-            model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
-        )
-        joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
+            metrics_dict = evaluate_block(model, scaler, block, fs)
+            metrics_dict["block"] = i
+            metrics_dict["samples"] = len(block)
+            results.append(metrics_dict)
+            # optional: save intermediate model
+            bloc_name = f"{serie}_block{i+1}"
+            out_folder = os.path.join(config.MODEL_DIR, "incremental")
+            os.makedirs(out_folder, exist_ok=True)
+            torch.save(
+                model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
+            )
+            joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
+    else:
+        # iterate through blocks: first block trains from scratch, others fine-tune
+        for i, block in enumerate(blocks):
+            print(
+                f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) ====="
+            )
+            if i == 0:
+                model = train_on_block(model, scaler, block, epochs=EPOCHS)
+            else:
+                # freeze early layers after first block
+                model = train_on_block(
+                    model, scaler, block, epochs=EPOCHS_FINETUNE, freeze=True
+                )
+            metrics_dict = evaluate_block(model, scaler, block, fs)
+            metrics_dict["block"] = i
+            metrics_dict["samples"] = len(block)
+            results.append(metrics_dict)
+            # optional: save intermediate model
+            bloc_name = f"{serie}_block{i+1}"
+            out_folder = os.path.join(config.MODEL_DIR, "incremental")
+            os.makedirs(out_folder, exist_ok=True)
+            torch.save(
+                model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
+            )
+            joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
 
     # save results table
     results_df = pd.DataFrame(results)
@@ -317,11 +362,6 @@ def main():
     fig, ax = plt.subplots(3, 1, figsize=(6, 8))
     ax[0].plot(results_df["block"], results_df["rmse"], marker="o")
     ax[0].set_ylabel("RMSE")
-    ax[1].plot(results_df["block"], results_df["slope"], marker="o")
-    ax[1].set_ylabel("Spectral slope")
-    ax[2].plot(results_df["block"], results_df["isotropy"], marker="o")
-    ax[2].set_ylabel("Isotropy")
-    ax[2].set_xlabel("Block index")
     plt.tight_layout()
     plot_path = os.path.join(
         config.DATA_DIR, "train", "results", f"results_{serie}", "block_evolution.png"
