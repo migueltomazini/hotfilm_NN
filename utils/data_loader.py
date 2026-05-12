@@ -7,7 +7,7 @@ time synchronization, and preparing datasets for training and inference.
 import pandas as pd
 import numpy as np
 import os
-
+from typing import List
 
 def _find_raw_file(series_id: str, prefix: str) -> str:
     """Helper: locate a CSV or DAT file for given prefix.
@@ -164,3 +164,28 @@ def prepare_blocks(
         blocks = new_blocks
     # Drop empty
     return [b for b in blocks if len(b) > 0]
+
+def split_dataframe_into_n_blocks(
+    df: pd.DataFrame, n_blocks: int
+) -> List[pd.DataFrame]:
+    """Split dataframe into exactly N blocks of approximately equal size.
+
+    Uses numpy.array_split to ensure exactly N blocks are created.
+    Block sizes may differ by at most 1 sample.
+
+    Args:
+        df: input dataframe.
+        n_blocks: desired number of blocks.
+
+    Returns:
+        list of exactly n_blocks dataframes.
+    """
+    if n_blocks <= 0:
+        return [df]
+    if n_blocks >= len(df):
+        return [df.iloc[[i]].reset_index(drop=True) for i in range(len(df))]
+    # use numpy to split indices evenly
+    indices = np.arange(len(df))
+    split_indices = np.array_split(indices, n_blocks)
+    blocks = [df.iloc[idx_list].reset_index(drop=True) for idx_list in split_indices]
+    return blocks
