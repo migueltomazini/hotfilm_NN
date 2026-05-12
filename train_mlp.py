@@ -31,7 +31,7 @@ import joblib
 import optuna
 
 # Import utility modules
-from utils import config, metrics, physics, data_loader
+from utils import config, metrics, physics, data_loader, hyperparameter_optimization
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -70,23 +70,6 @@ dir_base = config.BASE_DIR
 
 # Device configuration - using GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Validate command line arguments
-if len(sys.argv) < 2:
-    print(info_output)
-    sys.exit()
-
-# Parse command line: allow multiple series IDs and optional base model (.pth)
-args = sys.argv[1:]
-BASE_MODEL_NAME = None
-if len(args) >= 2 and args[-1].endswith(".pth"):
-    BASE_MODEL_NAME = args[-1]
-    SERIES_LIST = args[:-1]
-else:
-    SERIES_LIST = args
-
-# Combined identifier for multi-series runs (used for filenames)
-SERIE_IDENTIFIER = "_".join(SERIES_LIST)
 
 # ==============================================================================
 # MODEL AND DATASET
@@ -159,45 +142,6 @@ def get_base_model_params(model_name):
 # ==============================================================================
 
 
-def objective(trial, X_train, Y_train, X_val, Y_val, fs):
-    """Optuna objective function for physics-informed hyperparameter optimization."""
-    n_layers = trial.suggest_int("hidden_layers", 1, 4)
-    n_size = trial.suggest_int("hidden_size", 16, 128)
-    lr = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
-    b_size = trial.suggest_categorical("batch_size", [16, 32, 64])
-
-    train_loader = DataLoader(
-        VoltageVelocityDataset(X_train, Y_train, device),
-        batch_size=b_size,
-        shuffle=True,
-    )
-    model = MLP(input_size, output_size, n_size, n_layers).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
-
-    for _ in range(50):  # Fast trial
-        model.train()
-        for X, Y in train_loader:
-            optimizer.zero_grad()
-            criterion(model(X), Y).backward()
-            optimizer.step()
-
-    # Validation with physics metrics
-    model.eval()
-    with torch.no_grad():
-        preds = model(torch.tensor(X_val).float().to(device))
-        mse = criterion(preds, torch.tensor(Y_val).float().to(device)).item()
-        slope = physics.calculate_spectral_slope(preds.cpu().numpy(), fs)
-        slope_err = abs(slope - (-5 / 3)) / (5 / 3)
-
-        # Added safety for NaN or infinite results during Optuna optimization
-        score = (0.7 * mse) + (0.3 * slope_err)
-        if np.isnan(score) or np.isinf(score):
-            return 999.0  # High penalty for non-converging trials
-
-    return score
-
-
 def show_graphs(data, predictions, train_loss_hist, val_loss_hist):
     shown = predictions
     if torch.is_tensor(shown):
@@ -250,10 +194,27 @@ def format_time(seconds):
 
 
 def main():
+    # Validate and parse command line arguments
+    if len(sys.argv) < 2:
+        print(info_output)
+        sys.exit()
+
+    # Parse command line: allow multiple series IDs and optional base model (.pth)
+    args = sys.argv[1:]
+    base_model_name = None
+    if len(args) >= 2 and args[-1].endswith(".pth"):
+        base_model_name = args[-1]
+        series_list = args[:-1]
+    else:
+        series_list = args
+
+    # Combined identifier for multi-series runs (used for filenames)
+    serie_identifier = "_".join(series_list)
+    
     script_start_time = time.time()
 
     dfs, configs = [], []
-    for s in SERIES_LIST:
+    for s in series_list:
         df_path = os.path.join(data_dir, "train", f"train_df_{s}.csv")
         if not os.path.exists(df_path):
             raise FileNotFoundError(f"Training data not found: {csv_path}")
@@ -287,11 +248,11 @@ def main():
     Y_raw = df_total[["velocity_x", "velocity_y", "velocity_z"]].values
 
     # Persist or Fit Scaler based on training mode and ensure consistent scaling for fine-tuning
-    scaler_path = os.path.join(model_local, f"scaler_{SERIE_IDENTIFIER}.joblib")
+    scaler_path = os.path.join(model_local, f"scaler_{serie_identifier}.joblib")
 
-    if BASE_MODEL_NAME:
+    if base_model_name:
         # Fine-tuning mode: LOADING original scaler from base model
-        base_id = BASE_MODEL_NAME.replace("model_mlp_", "").replace(".pth", "")
+        base_id = base_model_name.replace("model_mlp_", "").replace(".pth", "")
         base_scaler_path = os.path.join(model_local, f"scaler_{base_id}.joblib")
 
         if os.path.exists(base_scaler_path):
@@ -321,9 +282,9 @@ def main():
     optuna_start_time = None
     optuna_duration = None
 
-    if BASE_MODEL_NAME:
-        print(f"\n[Fine-tuning] Loading base model weights: {BASE_MODEL_NAME}")
-        h_layers, h_size = get_base_model_params(BASE_MODEL_NAME)
+    if base_model_name:
+        print(f"\n[Fine-tuning] Loading base model weights: {base_model_name}")
+        h_layers, h_size = get_base_model_params(base_model_name)
 
         # Conservative hyperparameters for stable fine-tuning
         best_p = {
@@ -335,7 +296,7 @@ def main():
 
         model = MLP(input_size, output_size, h_size, h_layers).to(device)
         model.load_state_dict(
-            torch.load(os.path.join(model_local, BASE_MODEL_NAME), map_location=device)
+            torch.load(os.path.join(model_local, base_model_name), map_location=device)
         )
 
         # Freeze feature extraction layers to preserve previous knowledge
@@ -351,47 +312,9 @@ def main():
         print(f"\n[Optuna] Starting optimization from scratch...")
         optuna_start_time = time.time()
 
-        # Path to store per-series best parameters
-        best_params_dir = os.path.join(data_dir, "train", "best_params")
-        os.makedirs(best_params_dir, exist_ok=True)
-        best_params_path = os.path.join(
-            best_params_dir, f"best_params_{SERIE_IDENTIFIER}.json"
+        best_p = hyperparameter_optimization.optimize_hyperparameters(
+            X_train, Y_train, X_val, Y_val, fs, serie_identifier, device
         )
-
-        if os.path.exists(best_params_path):
-            with open(best_params_path, "r") as fh:
-                best_p = json.load(fh)
-            print(f"[Optuna] Reusing saved parameters for {SERIE_IDENTIFIER}")
-        else:
-            # Configure Optuna progress logging
-            optuna_progress_logger = logging.getLogger("optuna_progress")
-            optuna_progress_logger.setLevel(logging.INFO)
-            handler = logging.FileHandler("optuna_progress.log")
-            handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
-            optuna_progress_logger.addHandler(handler)
-
-            def progress_callback(study, trial):
-                if (
-                    trial.number % 5 == 0 or trial.number == 29
-                ):  # Log every 5 trials and last
-                    best_value = study.best_value if study.best_trial else float("inf")
-                    current_value = (
-                        trial.value if trial.value is not None else float("inf")
-                    )
-                    message = f"Trial {trial.number}: Current Score = {current_value:.6f}, Best Score = {best_value:.6f}"
-                    print(f"[Optuna Progress] {message}")
-                    optuna_progress_logger.info(message)
-
-            study = optuna.create_study(direction="minimize")
-            optuna.logging.set_verbosity(optuna.logging.WARNING)
-            study.optimize(
-                lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs),
-                n_trials=30,
-                callbacks=[progress_callback],
-            )
-            best_p = study.best_params
-            with open(best_params_path, "w") as fh:
-                json.dump(best_p, fh, indent=2)
 
         optuna_duration = time.time() - optuna_start_time
         print(f"[Optuna] Optimization completed in {format_time(optuna_duration)}")
@@ -468,9 +391,9 @@ def main():
         rmse = metrics.calculate_rmse_torch(predictions, target_tensor)
 
     # --- SAVE AND EXPORT ---
-    dest = os.path.join(data_dir, "train", "results", f"results_{SERIE_IDENTIFIER}")
+    dest = os.path.join(data_dir, "train", "results", f"results_{serie_identifier}")
     os.makedirs(dest, exist_ok=True)
-    new_model_path = os.path.join(model_local, f"model_mlp_{SERIE_IDENTIFIER}.pth")
+    new_model_path = os.path.join(model_local, f"model_mlp_{serie_identifier}.pth")
 
     torch.save(model.state_dict(), new_model_path)
     print(f"\n[Done] Training complete. Model saved: {new_model_path}")
@@ -496,7 +419,7 @@ def main():
             "Final_Slope": [final_slope],
             "Final_Isotropy": [final_iso],
         }
-    ).to_csv(os.path.join(dest, f"hyperparameters_{SERIE_IDENTIFIER}.csv"), index=False)
+    ).to_csv(os.path.join(dest, f"hyperparameters_{serie_identifier}.csv"), index=False)
 
     logging.info(
         f"Training complete. Metrics: RMSE={rmse:.6f}, Slope={final_slope:.4f}, Isotropy={final_iso:.4f}"

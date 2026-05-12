@@ -18,11 +18,13 @@ fixed row count, by minimum duration between samples, or by an explicit gap
 threshold (sensible for handling real datasets with irregular recording).
 
 Usage examples:
-    python3 incremental_train.py <serie> [--num-blocks N]
     python3 incremental_train.py 0610 --num-blocks 10
     python3 incremental_train.py 0610 --num-blocks 10 --scattered
     python3 incremental_train.py 0610 --num-blocks 10 --percentage 50
-    python3 incremental_predict.py --num-blocks 10 0610 --calc-metrics --input data/train/train_df_0610.csv
+    python3 incremental_train.py 0610 --num-blocks 10 --reverse-data
+    python3 incremental_train.py 0610 --num-blocks 10 --holdout-last
+    python3 incremental_train.py 0610 --num-blocks 10 --scattered --no-finetune
+    python3 incremental_train.py 0610 --num-blocks 10 --scattered --subsequent-finetune-pct 20
 
 If ``--num-blocks`` is provided the file will be chunked into N contiguous blocks
 of approximately equal size.
@@ -38,6 +40,7 @@ import argparse
 import logging
 from typing import List, Optional
 
+import copy
 import numpy as np
 import pandas as pd
 import torch
@@ -45,7 +48,7 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 import joblib
 import matplotlib.pyplot as plt
-from utils import config, metrics, physics, data_loader
+from utils import config, metrics, physics, data_loader, hyperparameter_optimization
 
 # reuse network definition from train_mlp
 import train_mlp
@@ -54,10 +57,8 @@ from train_mlp import MLP, VoltageVelocityDataset
 # configuration constants
 input_size = config.INPUT_SIZE
 output_size = config.OUTPUT_SIZE
-EPOCHS = 50  # reduced for incremental training
-EPOCHS_FINETUNE = 25  # reduced for fine-tuning
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu" if torch.cuda.is_available() else "cpu")
 
 # ---------------------------------------------------------------------------
 # DATA SEGMENTATION HELPERS
@@ -124,6 +125,8 @@ def train_on_block(
     block: pd.DataFrame,
     epochs: int,
     freeze: bool = False,
+    lr: float = 1e-4,
+    batch_size: int = 32,
 ) -> torch.nn.Module:
     """Fit or fine-tune ``model`` on a single block of data.
 
@@ -147,9 +150,9 @@ def train_on_block(
     Y_train, Y_val = Y_raw[:split], Y_raw[split:]
 
     train_loader = DataLoader(
-        VoltageVelocityDataset(X_train, Y_train, device), batch_size=32, shuffle=True
+        VoltageVelocityDataset(X_train, Y_train, device), batch_size=batch_size, shuffle=True
     )
-    val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val, device), batch_size=32)
+    val_loader = DataLoader(VoltageVelocityDataset(X_val, Y_val, device), batch_size=batch_size)
 
     if freeze:
         for param in model.parameters():
@@ -159,7 +162,7 @@ def train_on_block(
 
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+        filter(lambda p: p.requires_grad, model.parameters()), lr=lr
     )
 
     for epoch in range(epochs):
@@ -202,7 +205,6 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("serie", help="series identifier (e.g. 0610)")
-    # allow both hyphen and underscore variants for familiarity
     parser.add_argument(
         "--num-blocks",
         "--num_blocks",
@@ -225,9 +227,32 @@ def main():
     parser.add_argument(
         "--percentage",
         type=float,
-        default=20.0,
-        help="Percentage of data to use from each block in sequential mode (default 20.0)",
+        default=100.0,
+        help="Percentage of data to use from each block in sequential mode (default 100.0)",
     )
+    parser.add_argument(
+        "--reverse-data",
+        action="store_true",
+        help="Inverts the chronological order of the dataset before training.",
+    )
+    parser.add_argument(
+        "--holdout-last",
+        action="store_true",
+        help="Reserves the final block strictly for testing (no training). Used to validate model predictive capability.",
+    )
+    # --- INJECTION: New flags for Scattered Tests ---
+    parser.add_argument(
+        "--no-finetune",
+        action="store_true",
+        help="[Test 1] Disables fine-tuning in scattered mode. Evaluates the initial global model on all blocks.",
+    )
+    parser.add_argument(
+        "--subsequent-finetune-pct",
+        type=float,
+        default=None,
+        help="[Test 2] Percentage of block data to use for fine-tuning, starting immediately AFTER the initial scattered chunk.",
+    )
+    
     args = parser.parse_args()
     NUM_BLOCKS = args.num_blocks
     SCATTERED = args.scattered
@@ -259,6 +284,16 @@ def main():
         cfg = json.load(fh)
     fs = cfg["FS_HOTFILM"]
 
+    if args.reverse_data:
+        print("\n" + "!"*70)
+        print("🧪 [EXPERIMENTAL MODE] FLAG --reverse-data ACTIVATED!")
+        print("Inverting the entire chronological order of the DataFrame...")
+        print("!"*70 + "\n")
+        
+        df = df.iloc[::-1].reset_index(drop=True)
+        serie = f"{serie}_rev"
+        print(f"[Info] Series identifier changed to '{serie}' to prevent overwriting original models.\n")
+
     # segmentation
     if NUM_BLOCKS is not None:
         print(f"Splitting into exactly {NUM_BLOCKS} blocks...")
@@ -278,68 +313,155 @@ def main():
 
     print(f"Dataset split into {len(blocks)} blocks")
 
+    # Hyperparameter optimization
+    print("[Optimization] Optimizing hyperparameters...")
+    if SCATTERED:
+        # Use scattered initial data for optimization
+        opt_blocks = [block.iloc[: len(block) // len(blocks)] for block in blocks]
+        opt_df = pd.concat(opt_blocks).reset_index(drop=True)
+    else:
+        # Use first block for optimization
+        opt_df = blocks[0].copy()
+
+    # Prepare optimization data
+    X_opt = opt_df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    Y_opt = opt_df[["velocity_x", "velocity_y", "velocity_z"]].values
+
+    # Simple scaler for optimization
+    from sklearn.preprocessing import StandardScaler
+    opt_scaler = StandardScaler()
+    X_opt_scaled = opt_scaler.fit_transform(X_opt)
+
+    split_opt = int(0.8 * len(X_opt_scaled))
+    X_train_opt = X_opt_scaled[:split_opt]
+    Y_train_opt = Y_opt[:split_opt]
+    X_val_opt = X_opt_scaled[split_opt:]
+    Y_val_opt = Y_opt[split_opt:]
+
+    best_params = hyperparameter_optimization.optimize_hyperparameters(
+        X_train_opt, Y_train_opt, X_val_opt, Y_val_opt, fs, serie, device, suffix="_incremental"
+    )
+
+    print(f"[Optimization] Best params: {best_params}")
+
     # model and scaler initialization
     if args.base_model is not None and os.path.exists(args.base_model):
-        # attempt to read the architecture from the metadata of the specified base model
         try:
             h_layers, h_size = train_mlp.get_base_model_params(
                 os.path.basename(args.base_model)
             )
         except Exception:
-            h_layers, h_size = 2, 64  # fallback defaults in case metadata is missing
+            h_layers, h_size = best_params["hidden_layers"], best_params["hidden_size"]
         model = MLP(input_size, output_size, h_size, h_layers).to(device)
         model.load_state_dict(torch.load(args.base_model, map_location=device))
         scaler = joblib.load(args.base_model.replace(".pth", ".joblib"))
         print(f"Loaded base model and scaler from {args.base_model}")
     else:
-        # start from scratch simple architecture
-        model = MLP(input_size, output_size, 64, 2).to(device)
+        model = MLP(input_size, output_size, best_params["hidden_size"], best_params["hidden_layers"]).to(device)
         scaler = StandardScaler()
 
     results = []
     if SCATTERED:
-        # Initial training with scattered data
-        initial_blocks = [block.iloc[: len(block) // NUM_BLOCKS] for block in blocks]
+        # Initial training with scattered data: small portions from each block.
+        initial_blocks = [block.iloc[: len(block) // len(blocks)] for block in blocks]
         initial_df = pd.concat(initial_blocks).reset_index(drop=True)
         print(f"Initial training with {len(initial_df)} scattered samples")
-        model = train_on_block(model, scaler, initial_df, epochs=EPOCHS)
-        # Now fine-tune with each full block
+        model = train_on_block(
+            model, scaler, initial_df, epochs=best_params["epochs"],
+            lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+        )
+
+        # Preserve the initial model state so all block fine-tunings start from it.
+        initial_state = copy.deepcopy(model.state_dict())
+
+        out_folder = os.path.join(config.MODEL_DIR, "incremental")
+        os.makedirs(out_folder, exist_ok=True)
+
         for i, block in enumerate(blocks):
-            print(
-                f"\n===== Fine-tuning block {i+1}/{len(blocks)} ({len(block)} samples) ====="
-            )
-            model = train_on_block(
-                model, scaler, block, epochs=EPOCHS_FINETUNE, freeze=True
-            )
-            metrics_dict = evaluate_block(model, scaler, block, fs)
+            is_holdout = args.holdout_last and (i == len(blocks) - 1)
+            
+            print(f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) =====")
+            
+            block_model = MLP(input_size, output_size, best_params["hidden_size"], best_params["hidden_layers"]).to(device)
+            block_model.load_state_dict(initial_state)
+            
+            # --- INJECTION: Handling Test 1 and Test 2 Scenarios ---
+            if is_holdout:
+                print("--> 🛡️ HOLDOUT MODE: Evaluating only. No fine-tuning on this block.")
+            elif args.no_finetune:
+                print("--> 🛑 [Test 1] NO FINE-TUNING MODE: Evaluating global scattered model only.")
+            else:
+                # Determine which data to use for fine-tuning
+                if args.subsequent_finetune_pct is not None:
+                    # Calculate index right after the initial chunk
+                    start_idx = len(block) // len(blocks)
+                    # Calculate number of rows representing X% of the entire block
+                    num_rows = int(len(block) * (args.subsequent_finetune_pct / 100.0))
+                    end_idx = min(start_idx + num_rows, len(block))
+                    
+                    finetune_block = block.iloc[start_idx:end_idx].reset_index(drop=True)
+                    print(f"--> 📉 [Test 2] Fine-tuning on subsequent {args.subsequent_finetune_pct}% of data ({len(finetune_block)} samples).")
+                else:
+                    finetune_block = block
+                    print("--> Fine-tuning on the entire block (Standard Scattered).")
+                
+                # Check if finetune_block has data to avoid empty tensor errors
+                if len(finetune_block) > 0:
+                    block_model = train_on_block(
+                        block_model, scaler, finetune_block, epochs=best_params["epochs_finetune"],
+                        freeze=True, lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+                    )
+                else:
+                    print("--> ⚠️ Warning: Fine-tune block is empty. Skipping fine-tuning for this block.")
+
+            metrics_dict = evaluate_block(block_model, scaler, block, fs)
             metrics_dict["block"] = i
             metrics_dict["samples"] = len(block)
+            metrics_dict["is_holdout"] = is_holdout
             results.append(metrics_dict)
-            # optional: save intermediate model
+
             bloc_name = f"{serie}_block{i+1}"
-            out_folder = os.path.join(config.MODEL_DIR, "incremental")
-            os.makedirs(out_folder, exist_ok=True)
             torch.save(
-                model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
+                block_model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
             )
             joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
+            
+            if is_holdout:
+                log_path = os.path.join(out_folder, f"blind_test_train_log_{serie}.txt")
+                with open(log_path, "w") as f:
+                    f.write(f"BLIND HOLDOUT RESULTS (Train Script) - Serie {serie}\n")
+                    f.write(f"Mode: SCATTERED\n")
+                    f.write(f"RMSE on unseen Block {i+1}: {metrics_dict['rmse']:.6f}\n")
+                print(f"--> Blind holdout text log saved to {log_path}")
+
     else:
         # iterate through blocks: first block trains from scratch, others fine-tune
         for i, block in enumerate(blocks):
-            print(
-                f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) ====="
-            )
-            if i == 0:
-                model = train_on_block(model, scaler, block, epochs=EPOCHS)
+            is_holdout = args.holdout_last and (i == len(blocks) - 1)
+            
+            print(f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) =====")
+            
+            if is_holdout:
+                print("--> 🛡️ HOLDOUT MODE: Evaluating only. No fine-tuning on this block.")
             else:
-                # freeze early layers after first block
-                model = train_on_block(
-                    model, scaler, block, epochs=EPOCHS_FINETUNE, freeze=True
-                )
+                if i == 0:
+                    model = train_on_block(
+                        model, scaler, block, epochs=best_params["epochs"],
+                        lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+                    )
+                else:
+                    # freeze early layers after first block
+                    model = train_on_block(
+                        model, scaler, block, epochs=best_params["epochs_finetune"],
+                        freeze=True, lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+                    )
+            
             metrics_dict = evaluate_block(model, scaler, block, fs)
             metrics_dict["block"] = i
             metrics_dict["samples"] = len(block)
+            metrics_dict["is_holdout"] = is_holdout
             results.append(metrics_dict)
+            
             # optional: save intermediate model
             bloc_name = f"{serie}_block{i+1}"
             out_folder = os.path.join(config.MODEL_DIR, "incremental")
@@ -348,6 +470,14 @@ def main():
                 model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
             )
             joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
+
+            if is_holdout:
+                log_path = os.path.join(out_folder, f"blind_test_train_log_{serie}.txt")
+                with open(log_path, "w") as f:
+                    f.write(f"BLIND HOLDOUT RESULTS (Train Script) - Serie {serie}\n")
+                    f.write(f"Mode: SEQUENTIAL\n")
+                    f.write(f"RMSE on unseen Block {i+1}: {metrics_dict['rmse']:.6f}\n")
+                print(f"--> Blind holdout text log saved to {log_path}")
 
     # save results table
     results_df = pd.DataFrame(results)
@@ -359,9 +489,17 @@ def main():
     print(f"Block-wise metrics stored in {res_path}")
 
     # generate evolution plots
-    fig, ax = plt.subplots(3, 1, figsize=(6, 8))
-    ax[0].plot(results_df["block"], results_df["rmse"], marker="o")
-    ax[0].set_ylabel("RMSE")
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    
+    # Differentiate holdout in plot if it exists
+    if args.holdout_last:
+        ax.plot(results_df["block"][:-1], results_df["rmse"][:-1], marker="o", label="Trained Blocks")
+        ax.plot(results_df["block"].iloc[-1], results_df["rmse"].iloc[-1], marker="*", color="red", markersize=10, label="Blind Holdout")
+        ax.legend()
+    else:
+        ax.plot(results_df["block"], results_df["rmse"], marker="o")
+        
+    ax.set_ylabel("RMSE")
     plt.tight_layout()
     plot_path = os.path.join(
         config.DATA_DIR, "train", "results", f"results_{serie}", "block_evolution.png"
