@@ -210,7 +210,7 @@ def main():
 
     # Combined identifier for multi-series runs (used for filenames)
     serie_identifier = "_".join(series_list)
-    
+
     script_start_time = time.time()
 
     dfs, configs = [], []

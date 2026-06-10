@@ -9,6 +9,7 @@ import numpy as np
 import os
 from typing import List
 
+
 def _find_raw_file(series_id: str, prefix: str) -> str:
     """Helper: locate a CSV or DAT file for given prefix.
 
@@ -164,6 +165,7 @@ def prepare_blocks(
         blocks = new_blocks
     # Drop empty
     return [b for b in blocks if len(b) > 0]
+
 
 def split_dataframe_into_n_blocks(
     df: pd.DataFrame, n_blocks: int

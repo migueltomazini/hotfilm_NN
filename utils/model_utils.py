@@ -49,7 +49,7 @@ def load_block_model_and_scaler(
     best_params_path = os.path.join(
         config.DATA_DIR, "train", "best_params", f"best_params_{serie}_incremental.json"
     )
-    
+
     if os.path.exists(best_params_path):
         with open(best_params_path, "r") as f:
             best_params = json.load(f)
@@ -61,7 +61,9 @@ def load_block_model_and_scaler(
         num_hidden_layers = 2
 
     # Create model with correct architecture
-    model = MLP(config.INPUT_SIZE, config.OUTPUT_SIZE, hidden_size, num_hidden_layers).to(device)
+    model = MLP(
+        config.INPUT_SIZE, config.OUTPUT_SIZE, hidden_size, num_hidden_layers
+    ).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -73,16 +75,18 @@ def predict_on_block(
 ) -> np.ndarray:
     """Generate predictions for a specific dataframe block."""
     # Convert to float32 to save 50% RAM
-    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values.astype(np.float32)
+    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values.astype(
+        np.float32
+    )
     X_scaled = scaler.transform(X_raw)
 
     with torch.no_grad():
         preds = model(torch.tensor(X_scaled).float().to(device))
-        
+
     # Free memory immediately
     del X_raw
     del X_scaled
-    
+
     return preds.cpu().numpy()
 
 
@@ -105,13 +109,15 @@ def train_on_block(
     else:
         scaler.fit(X_raw)
         X_scaled = scaler.transform(X_raw)
-        
+
     split = int(0.9 * len(X_scaled))
     X_train, X_val = X_scaled[:split], X_scaled[split:]
     Y_train, Y_val = Y_raw[:split], Y_raw[split:]
 
     train_loader = DataLoader(
-        VoltageVelocityDataset(X_train, Y_train, device), batch_size=batch_size, shuffle=True
+        VoltageVelocityDataset(X_train, Y_train, device),
+        batch_size=batch_size,
+        shuffle=True,
     )
 
     if freeze:
@@ -138,17 +144,21 @@ def train_on_block(
 
 
 def evaluate_block(
-    model: torch.nn.Module, scaler: StandardScaler, block: pd.DataFrame, fs: float, device: torch.device
+    model: torch.nn.Module,
+    scaler: StandardScaler,
+    block: pd.DataFrame,
+    fs: float,
+    device: torch.device,
 ) -> dict:
     """Compute error metrics for a single block and return a dict."""
     X_raw = block[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
     Y_raw = block[["velocity_x", "velocity_y", "velocity_z"]].values
-    
+
     if hasattr(scaler, "mean_") and scaler.mean_.shape[0] == X_raw.shape[1]:
         X_scaled = scaler.transform(X_raw)
     else:
-        X_scaled = scaler.fit_transform(X_raw)  
-        
+        X_scaled = scaler.fit_transform(X_raw)
+
     with torch.no_grad():
         preds = model(torch.tensor(X_scaled).float().to(device))
     preds_np = preds.cpu().numpy()

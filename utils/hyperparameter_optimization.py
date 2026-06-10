@@ -33,7 +33,7 @@ def objective(trial, X_train, Y_train, X_val, Y_val, fs, device):
     """
     # Import locally to avoid circular dependency
     from train_mlp import MLP, VoltageVelocityDataset
-    
+
     n_layers = trial.suggest_int("hidden_layers", 1, 4)
     n_size = trial.suggest_int("hidden_size", 16, 128)
     lr = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
@@ -73,7 +73,9 @@ def objective(trial, X_train, Y_train, X_val, Y_val, fs, device):
     return score
 
 
-def optimize_hyperparameters(X_train, Y_train, X_val, Y_val, fs, serie_identifier, device, suffix=""):
+def optimize_hyperparameters(
+    X_train, Y_train, X_val, Y_val, fs, serie_identifier, device, suffix=""
+):
     """Optimize hyperparameters using Optuna.
 
     Args:
@@ -100,7 +102,9 @@ def optimize_hyperparameters(X_train, Y_train, X_val, Y_val, fs, serie_identifie
         with open(best_params_path, "r") as f:
             best_params = json.load(f)
     else:
-        print(f"[Optuna] Starting hyperparameter optimization for {serie_identifier}...")
+        print(
+            f"[Optuna] Starting hyperparameter optimization for {serie_identifier}..."
+        )
         study = optuna.create_study(direction="minimize")
         study.optimize(
             lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs, device),
@@ -115,6 +119,8 @@ def optimize_hyperparameters(X_train, Y_train, X_val, Y_val, fs, serie_identifie
         # Save optimized parameters
         with open(best_params_path, "w") as f:
             json.dump(best_params, f, indent=4)
-        print(f"[Optuna] Optimization completed. Best params saved to {best_params_path}")
+        print(
+            f"[Optuna] Optimization completed. Best params saved to {best_params_path}"
+        )
 
     return best_params

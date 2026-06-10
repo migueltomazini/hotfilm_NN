@@ -21,21 +21,55 @@ input_size = config.INPUT_SIZE
 output_size = config.OUTPUT_SIZE
 device = torch.device("cpu" if torch.cuda.is_available() else "cpu")
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Incremental training with block-wise metrics",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("serie", help="series identifier (e.g. 0610)")
-    parser.add_argument("--num-blocks", dest="num_blocks", type=int, default=None, help="number of blocks to split the dataset into")
-    parser.add_argument("--base-model", type=str, default=None, help="path to an existing .pth file for warm start")
-    parser.add_argument("--scattered", action="store_true", help="Use scattered training mode")
-    parser.add_argument("--percentage", type=float, default=100.0, help="Percentage of data to use from each block")
-    parser.add_argument("--reverse-data", action="store_true", help="Inverts chronological order")
-    parser.add_argument("--holdout-last", action="store_true", help="Reserves the final block strictly for testing")
-    parser.add_argument("--no-finetune", action="store_true", help="[Test 1] Disables fine-tuning in scattered mode")
-    parser.add_argument("--subsequent-finetune-pct", type=float, default=None, help="[Test 2] Percentage of block data to use for fine-tuning")
-    
+    parser.add_argument(
+        "--num-blocks",
+        dest="num_blocks",
+        type=int,
+        default=None,
+        help="number of blocks to split the dataset into",
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default=None,
+        help="path to an existing .pth file for warm start",
+    )
+    parser.add_argument(
+        "--scattered", action="store_true", help="Use scattered training mode"
+    )
+    parser.add_argument(
+        "--percentage",
+        type=float,
+        default=100.0,
+        help="Percentage of data to use from each block",
+    )
+    parser.add_argument(
+        "--reverse-data", action="store_true", help="Inverts chronological order"
+    )
+    parser.add_argument(
+        "--holdout-last",
+        action="store_true",
+        help="Reserves the final block strictly for testing",
+    )
+    parser.add_argument(
+        "--no-finetune",
+        action="store_true",
+        help="[Test 1] Disables fine-tuning in scattered mode",
+    )
+    parser.add_argument(
+        "--subsequent-finetune-pct",
+        type=float,
+        default=None,
+        help="[Test 2] Percentage of block data to use for fine-tuning",
+    )
+
     args = parser.parse_args()
     NUM_BLOCKS = args.num_blocks
     SCATTERED = args.scattered
@@ -65,11 +99,11 @@ def main():
     fs = cfg["FS_HOTFILM"]
 
     if args.reverse_data:
-        print("\n" + "!"*70)
+        print("\n" + "!" * 70)
         print("🧪 [EXPERIMENTAL MODE] FLAG --reverse-data ACTIVATED!")
         df = df.iloc[::-1].reset_index(drop=True)
         serie = f"{serie}_rev"
-        print("!"*70 + "\n")
+        print("!" * 70 + "\n")
 
     if NUM_BLOCKS is not None:
         print(f"Splitting into exactly {NUM_BLOCKS} blocks...")
@@ -78,7 +112,10 @@ def main():
         blocks = data_loader.prepare_blocks(df, block_size=None, gap_threshold=None)
 
     if not SCATTERED:
-        blocks = [b.iloc[: int(len(b) * PERCENTAGE / 100)].reset_index(drop=True) for b in blocks]
+        blocks = [
+            b.iloc[: int(len(b) * PERCENTAGE / 100)].reset_index(drop=True)
+            for b in blocks
+        ]
 
     if len(blocks) == 0:
         print("No blocks extracted from the dataset. Exiting.")
@@ -106,13 +143,23 @@ def main():
     Y_val_opt = Y_opt[split_opt:]
 
     best_params = hyperparameter_optimization.optimize_hyperparameters(
-        X_train_opt, Y_train_opt, X_val_opt, Y_val_opt, fs, serie, device, suffix="_incremental"
+        X_train_opt,
+        Y_train_opt,
+        X_val_opt,
+        Y_val_opt,
+        fs,
+        serie,
+        device,
+        suffix="_incremental",
     )
 
     if args.base_model is not None and os.path.exists(args.base_model):
         try:
             import train_mlp
-            h_layers, h_size = train_mlp.get_base_model_params(os.path.basename(args.base_model))
+
+            h_layers, h_size = train_mlp.get_base_model_params(
+                os.path.basename(args.base_model)
+            )
         except Exception:
             h_layers, h_size = best_params["hidden_layers"], best_params["hidden_size"]
         model = MLP(input_size, output_size, h_size, h_layers).to(device)
@@ -120,7 +167,12 @@ def main():
         scaler = joblib.load(args.base_model.replace(".pth", ".joblib"))
         print(f"Loaded base model and scaler from {args.base_model}")
     else:
-        model = MLP(input_size, output_size, best_params["hidden_size"], best_params["hidden_layers"]).to(device)
+        model = MLP(
+            input_size,
+            output_size,
+            best_params["hidden_size"],
+            best_params["hidden_layers"],
+        ).to(device)
         scaler = StandardScaler()
 
     results = []
@@ -129,8 +181,13 @@ def main():
         initial_df = pd.concat(initial_blocks).reset_index(drop=True)
         print(f"Initial training with {len(initial_df)} scattered samples")
         model = model_utils.train_on_block(
-            model, scaler, initial_df, epochs=best_params["epochs"],
-            device=device, lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+            model,
+            scaler,
+            initial_df,
+            epochs=best_params["epochs"],
+            device=device,
+            lr=best_params["learning_rate"],
+            batch_size=best_params["batch_size"],
         )
 
         initial_state = copy.deepcopy(model.state_dict())
@@ -139,108 +196,175 @@ def main():
 
         for i, block in enumerate(blocks):
             is_holdout = args.holdout_last and (i == len(blocks) - 1)
-            print(f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) =====")
-            
-            block_model = MLP(input_size, output_size, best_params["hidden_size"], best_params["hidden_layers"]).to(device)
+            print(
+                f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) ====="
+            )
+
+            block_model = MLP(
+                input_size,
+                output_size,
+                best_params["hidden_size"],
+                best_params["hidden_layers"],
+            ).to(device)
             block_model.load_state_dict(initial_state)
-            
+
             if is_holdout:
-                print("--> 🛡️ HOLDOUT MODE: Evaluating only. No fine-tuning on this block.")
+                print(
+                    "--> 🛡️ HOLDOUT MODE: Evaluating only. No fine-tuning on this block."
+                )
             elif args.no_finetune:
-                print("--> 🛑 [Test 1] NO FINE-TUNING MODE: Evaluating global scattered model only.")
+                print(
+                    "--> 🛑 [Test 1] NO FINE-TUNING MODE: Evaluating global scattered model only."
+                )
             else:
                 if args.subsequent_finetune_pct is not None:
                     start_idx = len(block) // len(blocks)
                     num_rows = int(len(block) * (args.subsequent_finetune_pct / 100.0))
                     end_idx = min(start_idx + num_rows, len(block))
-                    finetune_block = block.iloc[start_idx:end_idx].reset_index(drop=True)
-                    print(f"--> 📉 [Test 2] Fine-tuning on subsequent {args.subsequent_finetune_pct}% of data ({len(finetune_block)} samples).")
+                    finetune_block = block.iloc[start_idx:end_idx].reset_index(
+                        drop=True
+                    )
+                    print(
+                        f"--> 📉 [Test 2] Fine-tuning on subsequent {args.subsequent_finetune_pct}% of data ({len(finetune_block)} samples)."
+                    )
                 else:
                     finetune_block = block
                     print("--> Fine-tuning on the entire block (Standard Scattered).")
-                
+
                 if len(finetune_block) > 0:
                     block_model = model_utils.train_on_block(
-                        block_model, scaler, finetune_block, epochs=best_params["epochs_finetune"],
-                        device=device, freeze=True, lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+                        block_model,
+                        scaler,
+                        finetune_block,
+                        epochs=best_params["epochs_finetune"],
+                        device=device,
+                        freeze=True,
+                        lr=best_params["learning_rate"],
+                        batch_size=best_params["batch_size"],
                     )
 
-            metrics_dict = model_utils.evaluate_block(block_model, scaler, block, fs, device)
+            metrics_dict = model_utils.evaluate_block(
+                block_model, scaler, block, fs, device
+            )
             metrics_dict["block"] = i
             metrics_dict["samples"] = len(block)
             metrics_dict["is_holdout"] = is_holdout
             results.append(metrics_dict)
 
             bloc_name = f"{serie}_block{i+1}"
-            torch.save(block_model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth"))
+            torch.save(
+                block_model.state_dict(),
+                os.path.join(out_folder, f"model_{bloc_name}.pth"),
+            )
             joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
-            
+
             if is_holdout:
                 log_path = os.path.join(out_folder, f"blind_test_train_log_{serie}.txt")
                 with open(log_path, "w") as f:
-                    f.write(f"BLIND HOLDOUT RESULTS (Train Script) - Serie {serie}\nMode: SCATTERED\nRMSE on unseen Block {i+1}: {metrics_dict['rmse']:.6f}\n")
+                    f.write(
+                        f"BLIND HOLDOUT RESULTS (Train Script) - Serie {serie}\nMode: SCATTERED\nRMSE on unseen Block {i+1}: {metrics_dict['rmse']:.6f}\n"
+                    )
                 print(f"--> Blind holdout text log saved to {log_path}")
 
     else:
         for i, block in enumerate(blocks):
             is_holdout = args.holdout_last and (i == len(blocks) - 1)
-            print(f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) =====")
-            
+            print(
+                f"\n===== Processing block {i+1}/{len(blocks)} ({len(block)} samples) ====="
+            )
+
             if is_holdout:
-                print("--> 🛡️ HOLDOUT MODE: Evaluating only. No fine-tuning on this block.")
+                print(
+                    "--> 🛡️ HOLDOUT MODE: Evaluating only. No fine-tuning on this block."
+                )
             else:
                 if i == 0:
                     model = model_utils.train_on_block(
-                        model, scaler, block, epochs=best_params["epochs"],
-                        device=device, lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+                        model,
+                        scaler,
+                        block,
+                        epochs=best_params["epochs"],
+                        device=device,
+                        lr=best_params["learning_rate"],
+                        batch_size=best_params["batch_size"],
                     )
                 else:
                     model = model_utils.train_on_block(
-                        model, scaler, block, epochs=best_params["epochs_finetune"],
-                        device=device, freeze=True, lr=best_params["learning_rate"], batch_size=best_params["batch_size"]
+                        model,
+                        scaler,
+                        block,
+                        epochs=best_params["epochs_finetune"],
+                        device=device,
+                        freeze=True,
+                        lr=best_params["learning_rate"],
+                        batch_size=best_params["batch_size"],
                     )
-            
+
             metrics_dict = model_utils.evaluate_block(model, scaler, block, fs, device)
             metrics_dict["block"] = i
             metrics_dict["samples"] = len(block)
             metrics_dict["is_holdout"] = is_holdout
             results.append(metrics_dict)
-            
+
             bloc_name = f"{serie}_block{i+1}"
             out_folder = os.path.join(config.MODEL_DIR, "incremental")
             os.makedirs(out_folder, exist_ok=True)
-            torch.save(model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth"))
+            torch.save(
+                model.state_dict(), os.path.join(out_folder, f"model_{bloc_name}.pth")
+            )
             joblib.dump(scaler, os.path.join(out_folder, f"scaler_{bloc_name}.joblib"))
 
             if is_holdout:
                 log_path = os.path.join(out_folder, f"blind_test_train_log_{serie}.txt")
                 with open(log_path, "w") as f:
-                    f.write(f"BLIND HOLDOUT RESULTS (Train Script) - Serie {serie}\nMode: SEQUENTIAL\nRMSE on unseen Block {i+1}: {metrics_dict['rmse']:.6f}\n")
+                    f.write(
+                        f"BLIND HOLDOUT RESULTS (Train Script) - Serie {serie}\nMode: SEQUENTIAL\nRMSE on unseen Block {i+1}: {metrics_dict['rmse']:.6f}\n"
+                    )
 
     results_df = pd.DataFrame(results)
-    res_path = os.path.join(config.DATA_DIR, "train", "results", f"results_{serie}", "block_metrics.csv")
+    res_path = os.path.join(
+        config.DATA_DIR, "train", "results", f"results_{serie}", "block_metrics.csv"
+    )
     os.makedirs(os.path.dirname(res_path), exist_ok=True)
     results_df.to_csv(res_path, index=False)
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 4))
     if args.holdout_last:
-        ax.plot(results_df["block"][:-1], results_df["rmse"][:-1], marker="o", label="Trained Blocks")
-        ax.plot(results_df["block"].iloc[-1], results_df["rmse"].iloc[-1], marker="*", color="red", markersize=10, label="Blind Holdout")
+        ax.plot(
+            results_df["block"][:-1],
+            results_df["rmse"][:-1],
+            marker="o",
+            label="Trained Blocks",
+        )
+        ax.plot(
+            results_df["block"].iloc[-1],
+            results_df["rmse"].iloc[-1],
+            marker="*",
+            color="red",
+            markersize=10,
+            label="Blind Holdout",
+        )
         ax.legend()
     else:
         ax.plot(results_df["block"], results_df["rmse"], marker="o")
-        
+
     ax.set_ylabel("RMSE")
     plt.tight_layout()
-    plot_path = os.path.join(config.DATA_DIR, "train", "results", f"results_{serie}", "block_evolution.png")
+    plot_path = os.path.join(
+        config.DATA_DIR, "train", "results", f"results_{serie}", "block_evolution.png"
+    )
     fig.savefig(plot_path)
     plt.close(fig)
 
-    final_model_path = os.path.join(config.MODEL_DIR, "incremental", f"model_{serie}_final.pth")
-    final_scaler_path = os.path.join(config.MODEL_DIR, "incremental", f"scaler_{serie}_final.joblib")
+    final_model_path = os.path.join(
+        config.MODEL_DIR, "incremental", f"model_{serie}_final.pth"
+    )
+    final_scaler_path = os.path.join(
+        config.MODEL_DIR, "incremental", f"scaler_{serie}_final.joblib"
+    )
     torch.save(model.state_dict(), final_model_path)
     joblib.dump(scaler, final_scaler_path)
 
+
 if __name__ == "__main__":
     main()
-    
