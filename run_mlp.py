@@ -87,8 +87,6 @@ local_modelo = f"{model_local}/{model_file}"
 local_data = f"{dir_base}/data/run/run_{SERIE}.csv"
 local_destino = f"{dir_base}/data/run/results/velocity_{SERIE}"
 
-MODEL_ID = model_file.replace("model_mlp_", "").replace(".pth", "")
-
 print("\n\n -- -- -- -- - -- -- -- ")
 print("Series name:\t", SERIE)
 print("\n\n Network processing voltage data and generating output ")
@@ -184,7 +182,7 @@ class VoltageVelocityDataset(Dataset):
         """Initialize dataset from DataFrame.
 
         Args:
-            data: DataFrame with columns for voltage components, reynolds number, and velocities.
+            data: DataFrame with columns for voltage components and velocities.
         """
         self.X = (
             torch.tensor(
@@ -193,7 +191,6 @@ class VoltageVelocityDataset(Dataset):
                         f"{input_df_name}_x",
                         f"{input_df_name}_y",
                         f"{input_df_name}_z",
-                        "reynolds",
                     ]
                 ].values
             )
@@ -229,14 +226,10 @@ def validate_synthetic_results(serie, df_predicted, block_size=None, gap=None):
     """
     from utils.data_loader import prepare_blocks
 
-    # load config if present (used for sampling frequency)
-    cfg = {}
-    try:
-        with open(f"./data/config/config_{serie}.json") as fcfg:
-            cfg = json.load(fcfg)
-    except Exception:
-        pass
-    fs = cfg.get("FS_HOTFILM", 2000)
+    # Calculate sampling frequency dynamically
+    fs = spectral_utils.estimate_sampling_frequency(df_predicted, "time")
+    if fs is None:
+        fs = config.FS_HOTFILM_DEFAULT
 
     ref_path = f"./data/raw/{serie}/hotfilm_vel_{serie}.csv"
     df_block_summary = []
@@ -357,10 +350,10 @@ def validate_synthetic_results(serie, df_predicted, block_size=None, gap=None):
                     ]
                 ].values
                 slope = physics.calculate_spectral_slope(
-                    arr, fs=cfg.get("FS_HOTFILM", 2000)
+                    arr, fs=fs
                 )
                 iso = physics.calculate_isotropy_ratio(
-                    arr, fs=cfg.get("FS_HOTFILM", 2000)
+                    arr, fs=fs
                 )
                 print(f"Block {bi}: slope={slope:.4f}, isotropy={iso:.4f}")
     # end validate
@@ -373,7 +366,7 @@ def export_data_run(df, predictions, destino):
     and exports with high precision formatting.
 
     Args:
-        df: Input DataFrame with voltage and reynolds features.
+        df: Input DataFrame with voltage and features.
         predictions: Model output predictions.
         destino: Directory path for output file.
     """
@@ -408,26 +401,13 @@ def runModel():
     # Reconstruct network architecture based on metadata
     h_layers, h_size = get_model_metadata(MODEL_ID)
     model = MLP(
-        input_dim=4, output_dim=3, hidden_dim=h_size, num_hidden_layers=h_layers
+        input_dim=config.INPUT_SIZE, output_dim=config.OUTPUT_SIZE, hidden_dim=h_size, num_hidden_layers=h_layers
     ).to(device)
     model.load_state_dict(torch.load(local_modelo, map_location=device))
     model.eval()
 
     # Load input data and apply feature scaling
     data_in = pd.read_csv(local_data)
-
-    # add reynolds if missing (consult config)
-    if "reynolds" not in data_in.columns:
-        try:
-            with open(f"./data/config/config_{SERIE}.json") as fh:
-                cfg_local = json.load(fh)
-            data_in["reynolds"] = cfg_local.get("RE_NUMBER", 0.0)
-            print(
-                f"[Info] added missing reynolds={data_in['reynolds'].iloc[0]} from config"
-            )
-        except Exception:
-            data_in["reynolds"] = 0.0
-            print("[Warning] reynolds column missing, defaulted to 0.0")
 
     # Raw data cleaning to prevent NaN propagation
     data_in = data_in.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
@@ -437,7 +417,7 @@ def runModel():
 
     # Normalize input features using training statistics
     X_raw = data_in[
-        [f"{input_df_name}_x", f"{input_df_name}_y", f"{input_df_name}_z", "reynolds"]
+        [f"{input_df_name}_x", f"{input_df_name}_y", f"{input_df_name}_z"]
     ].values
     X_scaled = scaler.transform(X_raw)
 

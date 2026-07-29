@@ -15,7 +15,6 @@ applies the specific model for each block, and saves combined predictions.
 """
 
 import os
-import json
 import argparse
 import gc  # Garbarge collector for RAM protection
 from typing import Tuple, List
@@ -27,6 +26,7 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 import joblib
 from scipy.signal import butter, filtfilt, welch
+import json
 
 # Prevent Matplotlib from opening GUI windows (Avoids VS Code crashes)
 import matplotlib
@@ -153,7 +153,7 @@ def predict_on_block(
 ) -> np.ndarray:
     """Generate predictions for a specific dataframe block."""
     # Convert to float32 to save 50% RAM
-    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values.astype(np.float32)
+    X_raw = df[["voltage_x", "voltage_y", "voltage_z"]].values.astype(np.float32)
     X_scaled = scaler.transform(X_raw)
 
     with torch.no_grad():
@@ -411,19 +411,6 @@ def main():
     print(f"Loading data from {input_file}...")
     df = pd.read_csv(input_file)
 
-    if "reynolds" not in df.columns:
-        cfg_path = os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
-        re_val = 0.0
-        if os.path.exists(cfg_path):
-            try:
-                with open(cfg_path) as fh:
-                    cfg = json.load(fh)
-                    re_val = cfg.get("RE_NUMBER", 0.0)
-            except Exception:
-                pass
-        df["reynolds"] = re_val
-        print(f"[Info] added missing reynolds column = {re_val}")
-
     indices = np.arange(len(df))
     split_indices = np.array_split(indices, args.num_blocks)
 
@@ -500,16 +487,13 @@ def main():
         else:
             print("  [Warning] No synthetic reference file found. Magnification will be skipped.")
 
+    # Calculate dynamic sampling frequency
+    fs = spectral_utils.estimate_sampling_frequency(df, "time")
+    if fs is None:
+        fs = config.FS_HOTFILM_DEFAULT
+
     if has_true_data and Y_true_global is not None:
         print("\n[Correction] Applying Spectral Magnification (Kit et al. 2016)...")
-        cfg_path = os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
-        try:
-            with open(cfg_path) as fh:
-                cfg = json.load(fh)
-            fs = cfg.get("FS_HOTFILM", 2000.0)
-        except Exception:
-            fs = 2000.0
-            
         final_preds, k_factors = apply_spectral_magnification(final_preds, Y_true_global, fs)
         print(f"  Magnification factors (X, Y, Z): {k_factors[0]:.4f}, {k_factors[1]:.4f}, {k_factors[2]:.4f}")
 
@@ -681,23 +665,11 @@ def main():
     spectral_dir = os.path.join(output_dir, "plots_spectral")
     os.makedirs(spectral_dir, exist_ok=True)
 
-    try:
-        with open(os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")) as fh:
-            cfg = json.load(fh)
-        fs_hf = spectral_utils.estimate_sampling_frequency(df, "time")
-        if fs_hf is None:
-            fs_hf = cfg.get("FS_HOTFILM", 2000)
-    except Exception:
-        fs_hf = 2000.0
-
     fs_sonic = None
     if sonic_df is not None:
         fs_sonic = spectral_utils.estimate_sampling_frequency(sonic_df, "time")
     if fs_sonic is None:
-        try:
-            fs_sonic = cfg.get("FS_SONIC", 20.0)
-        except Exception:
-            fs_sonic = 20.0
+        fs_sonic = config.FS_SONIC_DEFAULT
 
     pred_cols = ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
 
@@ -706,7 +678,7 @@ def main():
         spectral_utils.plot_combined_spectrum(
             df,  
             pred_cols,
-            fs_hf,
+            fs,
             f"Global Spectral Analysis (Pred vs Sonic) - Serie {serie}",
             os.path.join(spectral_dir, f"combined_spectrum_global_{serie}.png"),
             sonic_df=sonic_df,
@@ -723,7 +695,7 @@ def main():
             spectral_utils.plot_combined_spectrum(
                 block_df_subset,
                 pred_cols,
-                fs_hf,
+                fs,
                 f"Spectral Analysis Block {i+1} vs Sonic - Serie {serie}",
                 os.path.join(spectral_dir, f"combined_spectrum_block_{i+1}_{serie}.png"),
                 sonic_df=sonic_df,

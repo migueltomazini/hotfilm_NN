@@ -25,7 +25,6 @@ Usage examples:
 
 import os
 import copy
-import json
 import argparse
 import numpy as np
 import pandas as pd
@@ -40,7 +39,7 @@ import joblib
 from scipy.signal import welch
 from sklearn.preprocessing import StandardScaler
 
-from utils import config, data_loader, hyperparameter_optimization, metrics
+from utils import config, data_loader, hyperparameter_optimization, metrics, spectral_utils
 from train_mlp import MLP
 
 input_size = config.INPUT_SIZE
@@ -111,7 +110,7 @@ def apply_spectral_magnification(y_pred, y_true, fs, f_cutoff=1.66):
 
 def evaluate_block_magnified(model, scaler, df, fs, device):
     """Evaluates the block and applies spectral magnification before calculating RMSE."""
-    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    X_raw = df[["voltage_x", "voltage_y", "voltage_z"]].values
     Y_raw = df[["velocity_x", "velocity_y", "velocity_z"]].values
     X_scaled = scaler.transform(X_raw)
     
@@ -147,7 +146,7 @@ def train_on_block(model, scaler, df, epochs, device, lr, batch_size, freeze=Fal
             param.requires_grad = True
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    X_raw = df[["voltage_x", "voltage_y", "voltage_z"]].values
     Y_raw = df[["velocity_x", "velocity_y", "velocity_z"]].values
     
     # EXTREMELY IMPORTANT: The scaler MUST be pre-fitted on RAW high-frequency data
@@ -235,22 +234,10 @@ def main():
         raise FileNotFoundError(f"Training data not found: {df_path}")
     df_raw = pd.read_csv(df_path)
 
-    if "reynolds" not in df_raw.columns:
-        cfg_path = os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
-        re_val = 0.0
-        if os.path.exists(cfg_path):
-            try:
-                with open(cfg_path) as fh:
-                    cfg_temp = json.load(fh)
-                re_val = cfg_temp.get("RE_NUMBER", 0.0)
-            except Exception:
-                pass
-        df_raw["reynolds"] = re_val
-        print(f"[Info] added missing reynolds column = {re_val}")
-
-    with open(os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")) as fh:
-        cfg = json.load(fh)
-    fs = cfg["FS_HOTFILM"]
+    # Dynamic FS calculation
+    fs = spectral_utils.estimate_sampling_frequency(df_raw, "time")
+    if fs is None:
+        fs = config.FS_HOTFILM_DEFAULT
 
     if args.reverse_data:
         print("\n" + "!" * 70)
@@ -303,9 +290,7 @@ def main():
         opt_df = blocks_smooth[0].iloc[: int(len(blocks_smooth[0]) * PERCENTAGE / 100)].reset_index(drop=True)
 
     print("[Optimization] Optimizing hyperparameters...")
-    # NOTE: Even for HPO, we should idealistically use raw scaling, but we will leave opt_scaler 
-    # to fit on opt_df for now to not break external module dependencies. The final training scaler will be rigid.
-    X_opt = opt_df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    X_opt = opt_df[["voltage_x", "voltage_y", "voltage_z"]].values
     Y_opt = opt_df[["velocity_x", "velocity_y", "velocity_z"]].values
 
     opt_scaler = StandardScaler()
@@ -359,11 +344,11 @@ def main():
                 idx_10 = int(len(b_raw) * 0.10)
                 raw_train_list.append(b_raw.iloc[:idx_10])
             raw_train_df = pd.concat(raw_train_list).reset_index(drop=True)
-            scaler.fit(raw_train_df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values)
+            scaler.fit(raw_train_df[["voltage_x", "voltage_y", "voltage_z"]].values)
         else:
             idx_train = int(len(blocks_raw[0]) * (PERCENTAGE / 100.0))
             raw_train_df = blocks_raw[0].iloc[:idx_train].reset_index(drop=True)
-            scaler.fit(raw_train_df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values)
+            scaler.fit(raw_train_df[["voltage_x", "voltage_y", "voltage_z"]].values)
         # ---------------------------------------------------------
 
     results = []

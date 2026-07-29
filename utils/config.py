@@ -22,7 +22,7 @@ RUN_DIR = os.path.join(DATA_DIR, "run")
 # MODEL CONFIGURATIONS
 # ==============================================================================
 
-INPUT_SIZE = 4  # voltage_x, voltage_y, voltage_z, reynolds
+INPUT_SIZE = 3  # voltage_x, voltage_y, voltage_z
 OUTPUT_SIZE = 3  # velocity_x, velocity_y, velocity_z
 
 # Training hyperparameters

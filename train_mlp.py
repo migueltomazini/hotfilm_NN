@@ -2,7 +2,7 @@
 
 This module trains Multi-Layer Perceptron models to predict wind velocity
 from hot-film voltage measurements. It supports both training from scratch (using Optuna)
-and fine-tuning an existing model to adapt to new King's Law constants and Reynolds numbers.
+and fine-tuning an existing model to adapt to new King's Law constants.
 
 Usage:
     Train with one or more series: python3 train_mlp.py <series1> [series2 ...]
@@ -12,7 +12,6 @@ Usage:
 import os
 import sys
 import time
-import json
 import warnings
 import logging
 from matplotlib import pyplot as plt
@@ -31,7 +30,7 @@ import joblib
 import optuna
 
 # Import utility modules
-from utils import config, metrics, physics, data_loader, hyperparameter_optimization
+from utils import config, metrics, physics, data_loader, hyperparameter_optimization, spectral_utils
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -49,8 +48,6 @@ Usage:
 
 IMPORTANT NOTE ON FINE-TUNING:
 - Fine-tuning now uses the OPTIMIZED HYPERPARAMETERS of the base model
-- The scaler is intelligently chosen: reused if Reynolds is similar, new if significantly different
-- This significantly improves generalization across different Reynolds numbers
 """
 
 # Use configuration constants
@@ -216,14 +213,12 @@ def main():
 
     script_start_time = time.time()
 
-    dfs, configs = [], []
+    dfs = []
     for s in series_list:
         df_path = os.path.join(data_dir, "train", f"train_df_{s}.csv")
         if not os.path.exists(df_path):
             raise FileNotFoundError(f"Training data not found: {df_path}")
         df = pd.read_csv(df_path)
-        with open(os.path.join(data_dir, "config", f"config_{s}.json"), "r") as f:
-            configs.append(json.load(f))
         dfs.append(df)
 
     # Combine datasets for training
@@ -240,11 +235,17 @@ def main():
         f"[Optimization] Training with the initial 20% of data to accelerate execution."
     )
 
-    fs = configs[0]["FS_HOTFILM"]
+    # Calculate sampling frequency dynamically from the time column
+    fs = spectral_utils.estimate_sampling_frequency(df_total, "time")
+    if fs is None:
+        fs = config.FS_HOTFILM_DEFAULT
+        print(f"[Warning] Could not estimate sampling frequency from 'time' column. Defaulting to {fs}Hz.")
+    else:
+        print(f"[Info] Estimated sampling frequency from data: {fs:.2f}Hz")
 
     # Extract features and targets
     X_raw = df_total[
-        [f"{input_df_name}_x", f"{input_df_name}_y", f"{input_df_name}_z", "reynolds"]
+        [f"{input_df_name}_x", f"{input_df_name}_y", f"{input_df_name}_z"]
     ].values
     Y_raw = df_total[["velocity_x", "velocity_y", "velocity_z"]].values
 

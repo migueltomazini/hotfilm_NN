@@ -60,14 +60,13 @@ def load_velocity_data(series_id: str) -> pd.DataFrame:
 
 
 def synchronize_and_merge(
-    voltage_df: pd.DataFrame, velocity_df: pd.DataFrame, reynolds: float
+    voltage_df: pd.DataFrame, velocity_df: pd.DataFrame
 ) -> pd.DataFrame:
-    """Synchronize voltage and velocity data by time and inject Reynolds number.
+    """Synchronize voltage and velocity data by time.
 
     Args:
         voltage_df: DataFrame with voltage data.
         velocity_df: DataFrame with velocity data.
-        reynolds: Reynolds number to inject as feature.
 
     Returns:
         Merged DataFrame with synchronized data.
@@ -80,24 +79,19 @@ def synchronize_and_merge(
         direction="nearest",
     )
 
-    # Inject Reynolds number as constant feature
-    merged["reynolds"] = reynolds
-
     return merged.round(12)  # For numerical precision
 
 
-def load_run_data(series_id: str, reynolds: float) -> pd.DataFrame:
+def load_run_data(series_id: str) -> pd.DataFrame:
     """Load and prepare data for inference (run mode).
 
     Args:
         series_id: Series identifier.
-        reynolds: Reynolds number.
 
     Returns:
-        DataFrame with voltage data and Reynolds number.
+        DataFrame with voltage data.
     """
     voltage_df = load_voltage_data(series_id)
-    voltage_df["reynolds"] = reynolds
     return voltage_df.round(12)
 
 
