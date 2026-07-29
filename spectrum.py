@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import periodogram
 from scipy.integrate import trapezoid as trapz
 import json
+import argparse
 
 from utils import spectral_utils
 
@@ -14,14 +15,21 @@ print("Starting spectrum.py")
 info_output = """
 Check the manual inside the following folder to place the correct data to generate the spectrum:
     manuals/manual.txt
-Usage: python3 script_name.py <SERIE> [--predicted-path PATH] [--sonic-path PATH]
+Usage: python3 script_name.py <SERIE> [predicted_path] [sonic_path]
 """
 
-if len(sys.argv) < 2:
-    print(info_output)
+# Implementação robusta de argumentos para aceitar os caminhos passados pelo terminal
+parser = argparse.ArgumentParser(description="Spectrum plotter", usage=info_output)
+parser.add_argument("serie", help="Series identifier")
+parser.add_argument("predicted_path", nargs="?", default=None, help="Path to predicted CSV")
+parser.add_argument("sonic_path", nargs="?", default=None, help="Path to sonic CSV/DAT")
+
+try:
+    args = parser.parse_args()
+except SystemExit:
     sys.exit(1)
 
-SERIE = sys.argv[1]
+SERIE = args.serie
 
 # --- USER INPUT FOR DISSIPATION CALCULATION ---
 calc_epsilon_model = False  # Disabled for now
@@ -70,28 +78,53 @@ if needs_config:
         config = None
 
 
-# Reading velocity data (time series)
-predicted_path = f"./data/run/results/velocity_{SERIE}/velocity_{SERIE}.csv"
-sonic_train_path = f"./data/train/train_df_{SERIE}.csv"
-sonic_raw_dat = f"./data/raw/{SERIE}/sonic_{SERIE}.dat"
-sonic_raw_csv = f"./data/raw/{SERIE}/sonic_{SERIE}.csv"
+# ==============================================================================
+# FUNÇÃO ROBUSTA DE CARREGAMENTO (Evita o KeyError)
+# ==============================================================================
+def load_velocity_data(filepath):
+    """Carrega dados garantindo a existência das colunas corretas (ignora cabeçalhos ausentes)"""
+    if filepath.endswith('.dat'):
+        df = pd.read_csv(filepath, delim_whitespace=True, header=None)
+    else:
+        df = pd.read_csv(filepath, sep=",")
+        # Se as colunas padrão não existirem, força a leitura sem cabeçalho
+        if "velocity_x" not in df.columns:
+            df = pd.read_csv(filepath, sep=",", header=None)
+            
+    # Renomeia as primeiras 4 colunas para o padrão do script
+    if len(df.columns) >= 4:
+        df = df.rename(columns={0: "time", 1: "velocity_x", 2: "velocity_y", 3: "velocity_z"})
+        
+    # Se a primeira linha originalmente era texto (ex: ['t', 'u', 'v', 'w']), descartá-la
+    if isinstance(df["time"].iloc[0], str):
+        df = df.iloc[1:].reset_index(drop=True)
+        df = df.astype(float)
+        
+    return df
 
-if os.path.exists(sonic_raw_dat):
-    print(f"[Spectrum] Loading sonic raw data from {sonic_raw_dat}")
-    data_sonic = pd.read_csv(
-        sonic_raw_dat,
-        delim_whitespace=True,
-        header=None,
-        names=["time", "velocity_x", "velocity_y", "velocity_z"],
-    )
-elif os.path.exists(sonic_raw_csv):
-    print(f"[Spectrum] Loading sonic raw data from {sonic_raw_csv}")
-    data_sonic = pd.read_csv(sonic_raw_csv, sep=",")
-else:
-    print(f"[Spectrum] Loading sonic training data from {sonic_train_path}")
-    data_sonic = pd.read_csv(sonic_train_path, sep=",")
-
+# ==============================================================================
+# CARREGAMENTO DOS DADOS (Respeitando os argumentos do terminal)
+# ==============================================================================
+predicted_path = args.predicted_path or f"./data/run/results/velocity_{SERIE}/velocity_{SERIE}.csv"
 data_predicted = pd.read_csv(predicted_path, sep=",")
+
+if args.sonic_path and os.path.exists(args.sonic_path):
+    print(f"[Spectrum] Loading custom sonic data from {args.sonic_path}")
+    data_sonic = load_velocity_data(args.sonic_path)
+else:
+    sonic_raw_dat = f"./data/raw/{SERIE}/sonic_{SERIE}.dat"
+    sonic_raw_csv = f"./data/raw/{SERIE}/sonic_{SERIE}.csv"
+    sonic_train_path = f"./data/train/train_df_{SERIE}.csv"
+
+    if os.path.exists(sonic_raw_dat):
+        print(f"[Spectrum] Loading sonic raw data from {sonic_raw_dat}")
+        data_sonic = load_velocity_data(sonic_raw_dat)
+    elif os.path.exists(sonic_raw_csv):
+        print(f"[Spectrum] Loading sonic raw data from {sonic_raw_csv}")
+        data_sonic = load_velocity_data(sonic_raw_csv)
+    else:
+        print(f"[Spectrum] Loading sonic training data from {sonic_train_path}")
+        data_sonic = load_velocity_data(sonic_train_path)
 
 # Definition of the exponent and the reference line (-5/3) for the log-log plot
 x_aux = np.linspace(1, 1000, 1000, endpoint=False)
@@ -127,7 +160,6 @@ k1_1_pred, k1_2_pred, k1_3_pred = None, None, None
 # ==============================================================================
 # 2. CALCULATION AND PROCESSING FUNCTIONS
 # ==============================================================================
-
 
 def log_bin_smoothing(
     freqs: np.ndarray, spectrum: np.ndarray, bins_per_decade: int = 30

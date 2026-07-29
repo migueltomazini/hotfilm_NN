@@ -109,7 +109,7 @@ def optimize_hyperparameters(
         study.optimize(
             lambda trial: objective(trial, X_train, Y_train, X_val, Y_val, fs, device),
             n_trials=50,
-            timeout=600,  # 10 minutes timeout
+            timeout=600,
         )
 
         best_params = study.best_params

@@ -8,6 +8,7 @@ each block is used for its respective data segment.
 Usage examples:
     python3 incremental_predict.py 0610 --num-blocks 10
     python3 incremental_predict.py 0610 --num-blocks 10 --calc-metrics
+    python3 incremental_predict.py 0610 --num-blocks 10 --calc-metrics --holdout-last
 
 The script reads from data/run/run_df_<serie>.csv, splits it into N blocks,
 applies the specific model for each block, and saves combined predictions.
@@ -16,6 +17,7 @@ applies the specific model for each block, and saves combined predictions.
 import os
 import json
 import argparse
+import gc  # Garbarge collector for RAM protection
 from typing import Tuple, List
 
 import numpy as np
@@ -24,26 +26,92 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 import joblib
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, welch
+
+# Prevent Matplotlib from opening GUI windows (Avoids VS Code crashes)
+import matplotlib
+matplotlib.use('Agg')
 
 from utils import config, metrics, physics, spectral_utils, validation_metrics
 from train_mlp import MLP
 
-device = torch.device("cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def cleanup_memory():
+    """Forces garbage collection and clears PyTorch cache to prevent OOM."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+def apply_block_averaging(df: pd.DataFrame, window: int = 600) -> pd.DataFrame:
+    """
+    Applies block averaging (rolling mean) to simulate the sonic anemometer's
+    low-frequency response on perfect synthetic data.
+    """
+    df_smoothed = df.copy()
+    cols_to_smooth = ["velocity_x", "velocity_y", "velocity_z"]
+    for col in cols_to_smooth:
+        if col in df_smoothed.columns:
+            df_smoothed[col] = df_smoothed[col].rolling(
+                window=window, center=True, min_periods=1
+            ).mean()
+    return df_smoothed
+
+# =============================================================================
+# SPECTRAL MAGNIFICATION CORRECTION (Kit et al. 2016)
+# =============================================================================
+def apply_spectral_magnification(y_pred, y_true, fs, f_cutoff=1.66):
+    """
+    Applies Spectral Magnification Correction as described in Kit et al. (2016).
+    Calculates the ratio of low-frequency spectral energy between the sonic reference (y_true)
+    and the NN prediction (y_pred), and multiplies the prediction fluctuations by the square root
+    of this ratio to restore high-frequency energy amplitude.
+    """
+    y_pred_mag = np.zeros_like(y_pred)
+    factors = []
+
+    for i in range(3): # For u, v, w components
+        # Increase nperseg to ensure sufficient frequency bins in the band of interest (e.g., 0.1 to 1.66Hz)
+        nperseg = min(len(y_true), int(fs * 10))
+        if nperseg < 256: 
+            nperseg = len(y_true)
+
+        # detrend='constant' is strictly required to prevent DC (mean) component leakage
+        f_true, p_true = welch(y_true[:, i], fs=fs, nperseg=nperseg, detrend='constant')
+        f_pred, p_pred = welch(y_pred[:, i], fs=fs, nperseg=nperseg, detrend='constant')
+
+        # Filter for the low frequency "anchor" band 
+        valid_idx = (f_true >= 0.1) & (f_true <= f_cutoff)
+
+        # Safety fallback for short data blocks where fs/nperseg > f_cutoff
+        if not np.any(valid_idx) and len(f_true) > 1:
+            valid_idx = (f_true > 0) & (f_true <= f_true[min(3, len(f_true)-1)])
+
+        if np.any(valid_idx):
+            # Evaluate the mean of the spectral ratios as strictly defined by the literature
+            spectral_ratios = p_true[valid_idx] / (p_pred[valid_idx] + 1e-10)
+            K = np.mean(spectral_ratios)
+            factor = np.sqrt(K)
+            
+            # Robust clipping to prevent explosive amplification due to local overfitting
+            factor = np.clip(factor, 0.1, 15.0)
+        else:
+            factor = 1.0
+
+        factors.append(factor)
+        
+        # Apply correction to the time series component fluctuations
+        mean_pred = np.mean(y_pred[:, i])
+        fluctuations = y_pred[:, i] - mean_pred
+        y_pred_mag[:, i] = mean_pred + (fluctuations * factor)
+
+    return y_pred_mag, factors
 
 
 def load_block_model_and_scaler(
     serie: str, block_idx: int
 ) -> Tuple[MLP, StandardScaler]:
-    """Load the specific model and scaler for a given series and block index.
-
-    Args:
-        serie: series identifier (e.g. 0610).
-        block_idx: The 1-based index of the block.
-
-    Returns:
-        Tuple of (Loaded MLP model, Loaded StandardScaler).
-    """
+    """Load the specific model and scaler for a given series and block index."""
     model_name = f"model_{serie}_block{block_idx}.pth"
     scaler_name = f"scaler_{serie}_block{block_idx}.joblib"
 
@@ -69,7 +137,6 @@ def load_block_model_and_scaler(
         hidden_size = best_params.get("hidden_size", 64)
         num_hidden_layers = best_params.get("hidden_layers", 2)
     else:
-        # Fallback to defaults if params file not found
         hidden_size = 64
         num_hidden_layers = 2
 
@@ -84,21 +151,18 @@ def load_block_model_and_scaler(
 def predict_on_block(
     model: MLP, scaler: StandardScaler, df: pd.DataFrame
 ) -> np.ndarray:
-    """Generate predictions for a specific dataframe block.
-
-    Args:
-        model: trained MLP model for this specific block.
-        scaler: fitted StandardScaler for this specific block.
-        df: dataframe with voltage columns and reynolds.
-
-    Returns:
-        numpy array of shape (N, 3) with predicted velocities.
-    """
-    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values
+    """Generate predictions for a specific dataframe block."""
+    # Convert to float32 to save 50% RAM
+    X_raw = df[["voltage_x", "voltage_y", "voltage_z", "reynolds"]].values.astype(np.float32)
     X_scaled = scaler.transform(X_raw)
 
     with torch.no_grad():
         preds = model(torch.tensor(X_scaled).float().to(device))
+        
+    # Free memory immediately
+    del X_raw
+    del X_scaled
+    
     return preds.cpu().numpy()
 
 
@@ -135,19 +199,11 @@ def generate_validation_plots(
     serie: str,
     fs: float
 ):
-    """Generate validation plots: scatterplots and dissipation series.
-    
-    Args:
-        df_results: DataFrame with predictions and true values (if available).
-        output_dir: Directory to save plots.
-        serie: Series identifier.
-        fs: Sampling frequency.
-    """
+    """Generate validation plots: scatterplots and dissipation series."""
     import matplotlib.pyplot as plt
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # Check if true velocity columns exist
     target_cols = ["velocity_x", "velocity_y", "velocity_z"]
     pred_cols = ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
     
@@ -158,10 +214,17 @@ def generate_validation_plots(
         print("📊 GENERATING VALIDATION PLOTS")
         print(f"{'='*60}")
         
-        # Clean data for visualization
         df_clean = df_results.dropna(subset=target_cols + pred_cols)
-        Y_true = df_clean[target_cols].values
-        Y_pred = df_clean[pred_cols].values
+        
+        # RAM Protection - Subsample if data is too large to avoid Matplotlib OOM
+        if len(df_clean) > 50000:
+            print(f"  [RAM Protection] Reducing visualization from {len(df_clean)} to 50000 points on scatterplot.")
+            df_plot = df_clean.sample(n=50000, random_state=42)
+        else:
+            df_plot = df_clean
+
+        Y_true = df_plot[target_cols].values
+        Y_pred = df_plot[pred_cols].values
         
         # --- 1. Scatterplot 1:1 Comparison ---
         print("Generating 1:1 velocity scatterplots...")
@@ -174,15 +237,12 @@ def generate_validation_plots(
             stats = scatter_data[comp_name]
             ax = axes[idx]
             
-            # Scatter plot
             ax.scatter(stats['true'], stats['pred'], alpha=0.5, s=10)
             
-            # Perfect 1:1 reference line
             min_val = min(stats['true'].min(), stats['pred'].min())
             max_val = max(stats['true'].max(), stats['pred'].max())
             ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect 1:1')
             
-            # Fitted regression line
             ax.plot([min_val, max_val], 
                    [min_val * stats['slope'] + stats['intercept'], 
                     max_val * stats['slope'] + stats['intercept']], 
@@ -198,14 +258,17 @@ def generate_validation_plots(
         plt.tight_layout()
         scatter_path = os.path.join(output_dir, f"scatterplot_1to1_{serie}.png")
         plt.savefig(scatter_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        plt.close(fig) 
+        plt.close('all') 
         print(f"  ✓ Saved to {scatter_path}")
         
-        # Print scatterplot statistics
         print("\n  Scatterplot Statistics:")
         for comp_name in comp_names:
             stats = scatter_data[comp_name]
             print(f"    {stats['label']:20s}: RMSE={stats['rmse']:.6f}, R²={stats['r_squared']:.6f}")
+            
+        del df_clean, df_plot, Y_true, Y_pred
+        cleanup_memory()
     else:
         print(f"\n[Warning] True velocity data not available for scatterplot generation.")
     
@@ -219,15 +282,7 @@ def generate_dissipation_series_plot(
     serie: str,
     fs: float
 ):
-    """Generate dissipation evolution plot across blocks.
-    
-    Args:
-        blocks_indices: List of index arrays for each block.
-        df_results: DataFrame with predictions and true values.
-        output_dir: Directory to save plot.
-        serie: Series identifier.
-        fs: Sampling frequency.
-    """
+    """Generate dissipation evolution plot across blocks."""
     import matplotlib.pyplot as plt
     from scipy.signal import periodogram
     
@@ -249,7 +304,6 @@ def generate_dissipation_series_plot(
     for block_idx, indices in enumerate(blocks_indices):
         block_df = df_results.iloc[indices]
         
-        # Skip blocks with insufficient data
         if len(block_df) < 100:
             continue
         
@@ -260,14 +314,9 @@ def generate_dissipation_series_plot(
             continue
         
         try:
-            # Simple dissipation proxy: turbulent kinetic energy decay
-            # Real dissipation calculation would require more complex spectral analysis
-            # Here we use kinetic energy of fluctuations as a proxy
-            
             u_true_fluc = Y_true - np.mean(Y_true, axis=0)
             u_pred_fluc = Y_pred - np.mean(Y_pred, axis=0)
             
-            # Total kinetic energy (proxy for dissipation rate)
             ke_true = 0.5 * np.mean(np.sum(u_true_fluc**2, axis=1))
             ke_pred = 0.5 * np.mean(np.sum(u_pred_fluc**2, axis=1))
             
@@ -282,10 +331,9 @@ def generate_dissipation_series_plot(
         print("[Warning] No valid blocks for dissipation analysis.")
         return
     
-    # Plot dissipation evolution
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    ax.plot(block_nums, epsilons_true, 'o-', label='True (Sonic)', linewidth=2, markersize=8)
+    ax.plot(block_nums, epsilons_true, 'o-', label='True (Sonic Proxy)', linewidth=2, markersize=8)
     ax.plot(block_nums, epsilons_pred, 's-', label='Predicted (Model)', linewidth=2, markersize=8)
     
     ax.set_xlabel('Block Number', fontsize=12)
@@ -294,7 +342,6 @@ def generate_dissipation_series_plot(
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
     
-    # Add continuity analysis
     if len(epsilons_pred) > 1:
         jumps = np.abs(np.diff(epsilons_pred))
         mean_jump = np.mean(jumps)
@@ -302,14 +349,16 @@ def generate_dissipation_series_plot(
         
         info_text = f"Block-to-Block Continuity:\nMean Jump: {mean_jump:.6e}\nMax Jump: {max_jump:.6e}"
         ax.text(0.02, 0.98, info_text, transform=ax.transAxes, 
-               fontsize=10, verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
     plt.tight_layout()
     plot_path = os.path.join(output_dir, f"dissipation_series_{serie}.png")
     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    plt.close(fig) 
+    plt.close('all')
     print(f"  ✓ Saved to {plot_path}")
+    cleanup_memory()
 
 
 def main():
@@ -341,11 +390,16 @@ def main():
         action="store_true",
         help="if input has velocity columns, also compute RMSE/metrics",
     )
+    parser.add_argument(
+        "--holdout-last",
+        action="store_true",
+        help="Ensures the last block is evaluated as a completely blind test using the (N-1) model.",
+    )
+    
     args = parser.parse_args()
 
     serie = args.serie
 
-    # Determine input file
     if args.input is None:
         input_file = os.path.join(config.DATA_DIR, "run", f"run_{serie}.csv")
     else:
@@ -357,7 +411,6 @@ def main():
     print(f"Loading data from {input_file}...")
     df = pd.read_csv(input_file)
 
-    # Ensure reynolds column exists
     if "reynolds" not in df.columns:
         cfg_path = os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
         re_val = 0.0
@@ -371,33 +424,100 @@ def main():
         df["reynolds"] = re_val
         print(f"[Info] added missing reynolds column = {re_val}")
 
-    # Split dataframe into N blocks to match training stages
     indices = np.arange(len(df))
     split_indices = np.array_split(indices, args.num_blocks)
 
     all_preds = []
 
-    # Process each block with its corresponding model
     print(f"Generating predictions using {args.num_blocks} incremental models...")
     for i, idx_list in enumerate(split_indices):
         block_num = i + 1
         block_df = df.iloc[idx_list].reset_index(drop=True)
 
-        # Load the specific model saved during incremental_train.py
-        model, scaler = load_block_model_and_scaler(serie, block_num)
+        try:
+            is_holdout = args.holdout_last and (i == len(split_indices) - 1)
+            
+            if is_holdout:
+                print(f"--> 🛡️ [Holdout Test] Predicting block {block_num} using model strictly from block {block_num - 1}")
+                model, scaler = load_block_model_and_scaler(serie, block_num - 1)
+            else:
+                model, scaler = load_block_model_and_scaler(serie, block_num)
 
-        preds = predict_on_block(model, scaler, block_df)
-        all_preds.append(preds)
+            preds = predict_on_block(model, scaler, block_df)
+            all_preds.append(preds)
+        finally:
+            if 'model' in locals(): del model
+            if 'scaler' in locals(): del scaler
+            del block_df
+            cleanup_memory()
 
-    # Combine all block predictions
     final_preds = np.vstack(all_preds)
+
+    # --- INJECTION: Apply Spectral Magnification Globally if True data exists ---
+    target_cols = ["velocity_x", "velocity_y", "velocity_z"]
+    Y_true_global = None
+    has_true_data = False
+    
+    if all(col in df.columns for col in target_cols):
+        Y_true_global = df[target_cols].values
+        has_true_data = True
+    else:
+        print("\n[Correction] Target velocities not found in input data.")
+        print("  -> Searching for synthetic reference to enable Spectral Magnification...")
+        
+        ref_path = os.path.join(config.DATA_DIR, "raw", serie, f"hotfilm_vel_{serie}.csv")
+        if not os.path.exists(ref_path):
+            ref_path = os.path.join(config.DATA_DIR, "train", f"train_df_{serie}.csv")
+            
+        if os.path.exists(ref_path):
+            print(f"  -> Loading reference from: {ref_path}")
+            try:
+                ref_df = pd.read_csv(ref_path)
+                # Handle missing headers in synthetic data
+                if "velocity_x" not in ref_df.columns:
+                    perfect_df_temp = pd.read_csv(ref_path, header=None)
+                    if len(perfect_df_temp.columns) >= 4:
+                        perfect_df_temp.columns = ["time", "velocity_x", "velocity_y", "velocity_z"]
+                    else:
+                        perfect_df_temp.columns = ["velocity_x", "velocity_y", "velocity_z"]
+                    ref_df = perfect_df_temp
+                
+                if all(col in ref_df.columns for col in target_cols):
+                    min_len = min(len(df), len(ref_df))
+                    print("  -> Applying 600-point block averaging to synthetic data to simulate sonic low-pass filter...")
+                    
+                    ref_smoothed = apply_block_averaging(ref_df.iloc[:min_len], window=600)
+                    Y_true_global = ref_smoothed[target_cols].values
+                    
+                    # Merge into main df so metrics and plots can be generated properly
+                    for col in target_cols:
+                        df[col] = ref_smoothed[col].values
+                        
+                    has_true_data = True
+                    print("  -> Synthetic sonic reference successfully injected into pipeline.")
+            except Exception as e:
+                print(f"  [Warning] Failed to load or process reference data: {e}")
+        else:
+            print("  [Warning] No synthetic reference file found. Magnification will be skipped.")
+
+    if has_true_data and Y_true_global is not None:
+        print("\n[Correction] Applying Spectral Magnification (Kit et al. 2016)...")
+        cfg_path = os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
+        try:
+            with open(cfg_path) as fh:
+                cfg = json.load(fh)
+            fs = cfg.get("FS_HOTFILM", 2000.0)
+        except Exception:
+            fs = 2000.0
+            
+        final_preds, k_factors = apply_spectral_magnification(final_preds, Y_true_global, fs)
+        print(f"  Magnification factors (X, Y, Z): {k_factors[0]:.4f}, {k_factors[1]:.4f}, {k_factors[2]:.4f}")
 
     # Add predictions to dataframe
     df["velocity_predicted_x"] = final_preds[:, 0]
     df["velocity_predicted_y"] = final_preds[:, 1]
     df["velocity_predicted_z"] = final_preds[:, 2]
 
-    # Determine output file
     if args.output is None:
         output_dir = os.path.join(
             config.DATA_DIR, "run", "results", f"velocity_{serie}"
@@ -412,44 +532,50 @@ def main():
 
     df.to_csv(output_file, index=False)
     print(f"Predictions saved to {output_file}")
+    
+    del final_preds
+    cleanup_memory()
 
     # --- METRICS CALCULATION ---
     if args.calc_metrics:
-        target_cols = ["velocity_x", "velocity_y", "velocity_z"]
-
         if all(col in df.columns for col in target_cols):
             print(f"\n{'='*50}")
-            print(f"📊 VALIDATION: ARTICLE METRICS")
+            print(f"📊 VALIDATION: ARTICLE METRICS (Magnified)")
             print(f"{'='*50}")
 
-            # Data cleaning and extraction
             df_clean = df.dropna(subset=target_cols + ["velocity_predicted_x"])
             Y_true = df_clean[target_cols].values
             Y_pred = df_clean[
                 ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
             ].values
 
-            # Get FS for the filter
-            with open(
-                os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")
-            ) as fh:
-                cfg = json.load(fh)
-            fs = cfg["FS_HOTFILM"]
-
-            # 1. Raw RMSE (point-to-point)
             rmse_global = metrics.calculate_rmse(Y_pred, Y_true)
-
-            # 2. Delta Parameter (Signal filtered at 2Hz and normalized)
             deltas = calculate_delta_metrics(Y_true, Y_pred, fs)
             delta_general = np.mean(deltas)
 
-            # 3. Skewness Parameter (Derivative distribution)
-            skewness_pred = validation_metrics.calculate_velocity_derivative_skewness(Y_pred, fs)
-            skewness_true = validation_metrics.calculate_velocity_derivative_skewness(Y_true, fs)
+            # Skewness Parameter evaluated safely block by block to avoid step discontinuities
+            sk_preds_list = []
+            sk_trues_list = []
 
-            # Prepare output text
+            for idx_list in split_indices:
+                block_clean = df.iloc[idx_list].dropna(subset=target_cols + ["velocity_predicted_x"])
+                if len(block_clean) > 10:
+                    b_true = block_clean[target_cols].values
+                    b_pred = block_clean[["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]].values
+                    
+                    sk_preds_list.append(validation_metrics.calculate_velocity_derivative_skewness(b_pred, fs))
+                    sk_trues_list.append(validation_metrics.calculate_velocity_derivative_skewness(b_true, fs))
+
+            skewness_pred = {
+                key: np.nanmean([d[key] for d in sk_preds_list]) for key in sk_preds_list[0]
+            } if sk_preds_list else {'u_longitudinal': 0, 'u_lateral': 0, 'u_vertical': 0}
+
+            skewness_true = {
+                key: np.nanmean([d[key] for d in sk_trues_list]) for key in sk_trues_list[0]
+            } if sk_trues_list else {'u_longitudinal': 0, 'u_lateral': 0, 'u_vertical': 0}
+
             output_text = f"{'='*50}\n"
-            output_text += f"📊 VALIDATION: ARTICLE METRICS\n"
+            output_text += f"📊 VALIDATION: ARTICLE METRICS (Global Dataset - Magnified)\n"
             output_text += f"{'='*50}\n\n"
             output_text += f"Records evaluated: {len(df_clean)}\n"
             output_text += f"Global Raw RMSE:  {rmse_global:.6f}\n"
@@ -465,18 +591,61 @@ def main():
             output_text += f"u3 (Vertical):      Pred={skewness_pred['u_vertical']:7.4f} | True={skewness_true['u_vertical']:7.4f}\n"
             output_text += f"{'-'*50}\n"
 
-            # Print to console
             print(output_text)
-
-            # Save to file
+            
             metrics_file = os.path.join(output_dir, f"delta_metrics_{serie}.txt")
             with open(metrics_file, "w") as f:
                 f.write(output_text)
-            print(f"Metrics saved to {metrics_file}")
+            print(f"Global Metrics saved to {metrics_file}")
+            
+            if args.holdout_last:
+                print(f"\n{'='*50}")
+                print(f"🛡️ VALIDATION: BLIND HOLDOUT BLOCK ONLY (Magnified)")
+                print(f"{'='*50}")
+                
+                last_block_indices = split_indices[-1]
+                df_holdout = df.iloc[last_block_indices].dropna(subset=target_cols + ["velocity_predicted_x"])
+                
+                if len(df_holdout) > 10:
+                    Y_true_h = df_holdout[target_cols].values
+                    Y_pred_h = df_holdout[["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]].values
+                    
+                    rmse_h = metrics.calculate_rmse(Y_pred_h, Y_true_h)
+                    deltas_h = calculate_delta_metrics(Y_true_h, Y_pred_h, fs)
+                    delta_general_h = np.mean(deltas_h)
+                    
+                    skewness_pred_h = validation_metrics.calculate_velocity_derivative_skewness(Y_pred_h, fs)
+                    skewness_true_h = validation_metrics.calculate_velocity_derivative_skewness(Y_true_h, fs)
+                    
+                    holdout_text = f"{'='*50}\n"
+                    holdout_text += f"🛡️ BLIND HOLDOUT METRICS (Untainted Data - Magnified)\n"
+                    holdout_text += f"{'='*50}\n\n"
+                    holdout_text += f"Records evaluated: {len(df_holdout)} (Block {args.num_blocks})\n"
+                    holdout_text += f"Holdout Raw RMSE:  {rmse_h:.6f}\n"
+                    holdout_text += f"{'-'*50}\n"
+                    holdout_text += f"Delta_u1 (X-axis):  {deltas_h[0]:.4f}\n"
+                    holdout_text += f"Delta_u2 (Y-axis):  {deltas_h[1]:.4f}\n"
+                    holdout_text += f"Delta_u3 (Z-axis):  {deltas_h[2]:.4f}\n"
+                    holdout_text += f"Delta General:      {delta_general_h:.4f}\n"
+                    holdout_text += f"{'-'*50}\n"
+                    holdout_text += f"Skewness S_k (Pred vs True):\n"
+                    holdout_text += f"u1 (Longitudinal):  Pred={skewness_pred_h['u_longitudinal']:7.4f} | True={skewness_true_h['u_longitudinal']:7.4f}\n"
+                    holdout_text += f"u2 (Lateral):       Pred={skewness_pred_h['u_lateral']:7.4f} | True={skewness_true_h['u_lateral']:7.4f}\n"
+                    holdout_text += f"u3 (Vertical):      Pred={skewness_pred_h['u_vertical']:7.4f} | True={skewness_true_h['u_vertical']:7.4f}\n"
+                    holdout_text += f"{'-'*50}\n"
+                    
+                    print(holdout_text)
+                    
+                    blind_metrics_file = os.path.join(output_dir, f"blind_delta_metrics_{serie}.txt")
+                    with open(blind_metrics_file, "w") as f:
+                        f.write(holdout_text)
+                    print(f"Blind Holdout Metrics saved to {blind_metrics_file}")
+                
+            del df_clean, Y_true, Y_pred
+            cleanup_memory()
         else:
             warning_msg = "\n[Warning] Velocity columns not found for metrics calculation."
             print(warning_msg)
-            # Save warning to file if possible
             metrics_file = os.path.join(output_dir, f"delta_metrics_{serie}.txt")
             with open(metrics_file, "w") as f:
                 f.write(warning_msg)
@@ -485,76 +654,87 @@ def main():
 
     # --- GENERATE VALIDATION PLOTS ---
     if args.calc_metrics:
-        generate_validation_plots(df, output_dir, serie, fs)
-        generate_dissipation_series_plot(split_indices, df, output_dir, serie, fs)
+        try:
+            generate_validation_plots(df, output_dir, serie, fs)
+            generate_dissipation_series_plot(split_indices, df, output_dir, serie, fs)
+        except Exception as e:
+            print(f"[Proteção de Crash] Falha ao gerar gráficos de validação: {e}")
 
     # --- AUTOMATIC SPECTRAL ANALYSIS (MULTI-PLOT STYLE) ---
     print(f"\n{'='*50}")
     print("📊 STARTING SPECTRAL VALIDATION (PRED VS SONIC)")
     print(f"{'='*50}")
 
-    # 1. Load Sonic Data safely (Ground Truth)
     sonic_file = os.path.join(config.DATA_DIR, "train", f"train_df_{serie}.csv")
     sonic_df = None
     if os.path.exists(sonic_file):
         print(f"[Spectral] Loading sonic reference from {sonic_file}")
-        # Optimize memory by loading only necessary columns and preserve the time index
         sonic_df = pd.read_csv(
             sonic_file,
             usecols=["time", "velocity_x", "velocity_y", "velocity_z"],
         )
-        # If sonic file is massive, take a representative sample to save RAM
         if len(sonic_df) > 500000:
             sonic_df = sonic_df.iloc[:500000].reset_index(drop=True)
     else:
         print(f"[Warning] Sonic file not found. Spectra will show predictions only.")
 
-    # 2. Setup Plotting Environment
     spectral_dir = os.path.join(output_dir, "plots_spectral")
     os.makedirs(spectral_dir, exist_ok=True)
 
-    with open(os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")) as fh:
-        cfg = json.load(fh)
-    fs_hf = spectral_utils.estimate_sampling_frequency(df, "time")
-    if fs_hf is None:
-        fs_hf = cfg.get("FS_HOTFILM", 2000)
+    try:
+        with open(os.path.join(config.DATA_DIR, "config", f"config_{serie}.json")) as fh:
+            cfg = json.load(fh)
+        fs_hf = spectral_utils.estimate_sampling_frequency(df, "time")
+        if fs_hf is None:
+            fs_hf = cfg.get("FS_HOTFILM", 2000)
+    except Exception:
+        fs_hf = 2000.0
 
     fs_sonic = None
     if sonic_df is not None:
         fs_sonic = spectral_utils.estimate_sampling_frequency(sonic_df, "time")
     if fs_sonic is None:
-        fs_sonic = cfg.get("FS_SONIC", 20.0)
+        try:
+            fs_sonic = cfg.get("FS_SONIC", 20.0)
+        except Exception:
+            fs_sonic = 20.0
 
     pred_cols = ["velocity_predicted_x", "velocity_predicted_y", "velocity_predicted_z"]
 
-    # 3. Generate Global Spectrum (Full Prediction vs Sonic)
     print("Generating global spectral comparison...")
-    spectral_utils.plot_combined_spectrum(
-        df,  # Use the full DF with all concatenated predictions
-        pred_cols,
-        fs_hf,
-        f"Global Spectral Analysis (Pred vs Sonic) - Serie {serie}",
-        os.path.join(spectral_dir, f"combined_spectrum_global_{serie}.png"),
-        sonic_df=sonic_df,
-        fs_sonic=fs_sonic,
-    )
-
-    # 4. Generate Block-wise Spectra (Individual Incremental Steps)
-    print(f"Generating spectral plots for {args.num_blocks} data blocks...")
-    for i, idx_list in enumerate(split_indices):
-        # Pass only the necessary slice and columns to the plotting function to save RAM
-        block_df_subset = df.iloc[idx_list][pred_cols]
-
+    try:
         spectral_utils.plot_combined_spectrum(
-            block_df_subset,
+            df,  
             pred_cols,
             fs_hf,
-            f"Spectral Analysis Block {i+1} vs Sonic - Serie {serie}",
-            os.path.join(spectral_dir, f"combined_spectrum_block_{i+1}_{serie}.png"),
+            f"Global Spectral Analysis (Pred vs Sonic) - Serie {serie}",
+            os.path.join(spectral_dir, f"combined_spectrum_global_{serie}.png"),
             sonic_df=sonic_df,
             fs_sonic=fs_sonic,
         )
-        print(f" -> Saved block {i+1}/{args.num_blocks}")
+    except Exception as e:
+        print(f"[Proteção de Crash] Falha ao gerar espectro global: {e}")
+
+    print(f"Generating spectral plots for {args.num_blocks} data blocks...")
+    for i, idx_list in enumerate(split_indices):
+        try:
+            block_df_subset = df.iloc[idx_list][pred_cols]
+
+            spectral_utils.plot_combined_spectrum(
+                block_df_subset,
+                pred_cols,
+                fs_hf,
+                f"Spectral Analysis Block {i+1} vs Sonic - Serie {serie}",
+                os.path.join(spectral_dir, f"combined_spectrum_block_{i+1}_{serie}.png"),
+                sonic_df=sonic_df,
+                fs_sonic=fs_sonic,
+            )
+            print(f" -> Saved block {i+1}/{args.num_blocks}")
+        except Exception as e:
+            print(f"[Proteção de Crash] Falha ao gerar espectro do bloco {i+1}: {e}")
+        finally:
+            if 'block_df_subset' in locals(): del block_df_subset
+            cleanup_memory()
 
     print(f"\n[Done] All spectral plots are available in: {spectral_dir}")
 

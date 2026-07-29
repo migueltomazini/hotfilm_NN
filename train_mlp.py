@@ -47,10 +47,10 @@ Usage:
     Train with one or more series: python3 train_mlp.py <series1> [series2 ...]
     Fine-tuning (optional): python3 train_mlp.py <series1> [series2 ...] <base_model_name.pth>
 
-NOTA IMPORTANTE SOBRE FINE-TUNING:
-- Fine-tuning agora usa os HIPERPARAMETROS OTIMIZADOS do modelo base
-- O scaler e inteligentemente escolhido: reutilizado se Reynolds similar, novo se muito diferente
-- Isso melhora significativamente a generalizacao entre diferentes numeros de Reynolds
+IMPORTANT NOTE ON FINE-TUNING:
+- Fine-tuning now uses the OPTIMIZED HYPERPARAMETERS of the base model
+- The scaler is intelligently chosen: reused if Reynolds is similar, new if significantly different
+- This significantly improves generalization across different Reynolds numbers
 """
 
 # Use configuration constants
@@ -75,11 +75,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # MODEL AND DATASET
 # ==============================================================================
 
-
 class MLP(nn.Module):
     """Multi-Layer Perceptron for voltage-to-velocity prediction.
 
-    Configurable fully-connected network with ReLU activations between layers.
+    Configurable fully-connected network with Tanh activations between layers,
+    providing compact support mapping suitable for physical flow properties.
     """
 
     def __init__(self, input_dim, output_dim, hidden_dim, num_hidden_layers):
@@ -93,9 +93,10 @@ class MLP(nn.Module):
     def forward(self, x):
         if x.dim() == 3:
             x = x.squeeze(1)
-        x = torch.relu(self.input_layer(x))
+        # Replaced ReLU with Tanh to bound high-frequency variance extrapolation
+        x = torch.tanh(self.input_layer(x))
         for layer in self.hidden_layers:
-            x = torch.relu(layer(x))
+            x = torch.tanh(layer(x))
         return self.output_layer(x)
 
 
@@ -210,6 +211,8 @@ def main():
 
     # Combined identifier for multi-series runs (used for filenames)
     serie_identifier = "_".join(series_list)
+    global SERIE_IDENTIFIER
+    SERIE_IDENTIFIER = serie_identifier
 
     script_start_time = time.time()
 
@@ -217,7 +220,7 @@ def main():
     for s in series_list:
         df_path = os.path.join(data_dir, "train", f"train_df_{s}.csv")
         if not os.path.exists(df_path):
-            raise FileNotFoundError(f"Training data not found: {csv_path}")
+            raise FileNotFoundError(f"Training data not found: {df_path}")
         df = pd.read_csv(df_path)
         with open(os.path.join(data_dir, "config", f"config_{s}.json"), "r") as f:
             configs.append(json.load(f))
@@ -231,13 +234,11 @@ def main():
         df_total.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
     )
 
-    # REDUÇÃO PARA 20% DOS DADOS ---
-    # Para manter a lógica de "blocos", pegamos os 20% iniciais do dataframe total
+    # DATA REDUCTION (20% for faster optimization runs)
     df_total = df_total.iloc[: int(len(df_total) * 0.2)].reset_index(drop=True)
     print(
-        f"[Optimization] Treinando com os 20% iniciais dos dados para acelerar execução."
+        f"[Optimization] Training with the initial 20% of data to accelerate execution."
     )
-    # --------------------------------------------------
 
     fs = configs[0]["FS_HOTFILM"]
 
